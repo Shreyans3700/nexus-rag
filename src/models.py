@@ -14,6 +14,7 @@ class ResponseModel(BaseModel):
     model_used: str
     tokens_used: int
     latency_time: float
+    status_code: int = Field(200, ge=100, le=599)
 
 
 class SessionHistoryRequest(BaseModel):
@@ -29,3 +30,4 @@ class Session(BaseModel):
 class SessionHistoryResponse(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     history: List[Session] = []
+    status_code: int = Field(200, ge=100, le=599)

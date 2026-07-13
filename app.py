@@ -1,7 +1,8 @@
 import logging
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends
 from src.config import set_environment
 from src.models import (
     RequestModel,
@@ -12,6 +13,7 @@ from src.models import (
 from fastapi.responses import StreamingResponse
 from src.llm import get_answer, stream_answer
 from src.db import get_session_history_from_db
+from src.auth import verify_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ async def index():
     return {"service": "EndToEndChatBot", "status": "ok"}
 
 
-@app.post("/chat", response_model=ResponseModel)
+@app.post("/chat", response_model=ResponseModel, dependencies=[Depends(verify_api_key)])
 async def chat_with_bot(request: RequestModel) -> ResponseModel:
     try:
         response = await get_answer(
@@ -40,7 +42,8 @@ async def chat_with_bot(request: RequestModel) -> ResponseModel:
     except Exception as error:
         logger.exception("Chat request failed")
         raise HTTPException(
-            status_code=502, detail="Unable to generate a response"
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to generate a response",
         ) from error
 
     return ResponseModel(
@@ -50,18 +53,30 @@ async def chat_with_bot(request: RequestModel) -> ResponseModel:
         model_used=response["model_used"],
         tokens_used=response["tokens"],
         latency_time=response["latency_time"],
+        status_code=status.HTTP_200_OK,
     )
 
 
-@app.get("/getSessionHistory")
+@app.get("/getSessionHistory", dependencies=[Depends(verify_api_key)])
 async def get_session_history(request: SessionHistoryRequest) -> SessionHistoryResponse:
-    session_id = request.session_id
-    history = await get_session_history_from_db(session_id=session_id, db=app.state.db)
+    try:
+        session_id = request.session_id
+        history = await get_session_history_from_db(
+            session_id=session_id, db=app.state.db
+        )
 
-    return SessionHistoryResponse(session_id=session_id, history=history)
+        return SessionHistoryResponse(
+            session_id=session_id, history=history, status_code=status.HTTP_200_OK
+        )
+    except Exception as error:
+        logger.exception("Get session history failed")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to fetch session history",
+        ) from error
 
 
-@app.post("/chat/stream")
+@app.post("/chat/stream", dependencies=[Depends(verify_api_key)])
 async def stream_chat(request: RequestModel) -> StreamingResponse:
     try:
         return StreamingResponse(
@@ -72,12 +87,14 @@ async def stream_chat(request: RequestModel) -> StreamingResponse:
                 db=app.state.db,
             ),
             media_type="text/event-stream",
+            status_code=status.HTTP_200_OK,
         )
-    except Exception as e:
+    except Exception as error:
         logger.exception("Stream request failed.")
         raise HTTPException(
-            status_code=502, detail="Unable to generate a response"
-        ) from e
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to generate a response",
+        ) from error
 
 
 if __name__ == "__main__":
