@@ -9,15 +9,17 @@ import secrets
 import time
 from typing import Any
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, status
 
 from src.config.config import (
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     PASSWORD_HASH_ITERATIONS,
-    required_setting,
 )
+from src.logger import get_logger, set_user_id
 from src.routes.dependencies import get_db
 from src.schema.models import CurrentUser
+
+logger = get_logger(__name__)
 
 JWT_ALGORITHM = "HS256"
 PASSWORD_ALGORITHM = "pbkdf2_sha256"
@@ -169,6 +171,7 @@ async def get_current_user(
     authorization: str | None = Header(default=None),
     db=Depends(get_db),
 ) -> CurrentUser:
+    logger.debug("Authenticating request")
     token = _extract_bearer_token(authorization)
     payload = decode_access_token(token)
     user_id = payload.get("sub")
@@ -189,9 +192,13 @@ async def get_current_user(
         )
 
     if row is None:
+        logger.warning("Authenticated token mapped to missing user_id=%s", user_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
         )
 
-    return CurrentUser(id=str(row["id"]), email=row["email"])
+    resolved_user_id = str(row["id"])
+    set_user_id(resolved_user_id)
+    logger.debug("Authenticated user loaded: user_id=%s email=%s", resolved_user_id, row["email"])
+    return CurrentUser(id=resolved_user_id, email=row["email"])

@@ -1,20 +1,21 @@
-import logging
 import uuid
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.auth import create_access_token, hash_password, verify_password
+from src.logger import get_logger, set_user_id
 from src.routes.dependencies import get_db
 from src.schema.models import AuthResponse, LoginRequest, SignupRequest, UserResponse
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 async def _create_user(email: str, password: str, db) -> AuthResponse:
     normalized_email = email.strip().lower()
+    logger.debug("Signup request received for email=%s", normalized_email)
     if not normalized_email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -23,6 +24,7 @@ async def _create_user(email: str, password: str, db) -> AuthResponse:
 
     password_hash = hash_password(password)
     user_id = str(uuid.uuid4())
+    set_user_id(user_id)
 
     async with db.acquire() as connection:
         try:
@@ -36,12 +38,14 @@ async def _create_user(email: str, password: str, db) -> AuthResponse:
                 password_hash,
             )
         except asyncpg.exceptions.UniqueViolationError as error:
+            logger.info("Signup rejected because email already exists: email=%s", normalized_email)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Email is already registered",
             ) from error
 
     token = create_access_token(user_id=user_id, email=normalized_email)
+    logger.info("User signed up successfully: user_id=%s email=%s", user_id, normalized_email)
     return AuthResponse(
         access_token=token,
         token_type="bearer",
@@ -66,6 +70,7 @@ async def signup(request: SignupRequest, db=Depends(get_db)) -> AuthResponse:
 @router.post("/login", response_model=AuthResponse)
 async def login(request: LoginRequest, db=Depends(get_db)) -> AuthResponse:
     normalized_email = request.email.strip().lower()
+    logger.debug("Login request received for email=%s", normalized_email)
     try:
         async with db.acquire() as connection:
             row = await connection.fetchrow(
@@ -78,13 +83,16 @@ async def login(request: LoginRequest, db=Depends(get_db)) -> AuthResponse:
             )
 
         if row is None or not verify_password(request.password, row["password_hash"]):
+            logger.warning("Login failed for email=%s", normalized_email)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password",
             )
 
         user_id = str(row["id"])
+        set_user_id(user_id)
         token = create_access_token(user_id=user_id, email=row["email"])
+        logger.info("User logged in successfully: user_id=%s email=%s", user_id, row["email"])
         return AuthResponse(
             access_token=token,
             token_type="bearer",

@@ -1,8 +1,8 @@
 from typing import Any
 
+import asyncpg
 from fastapi import Request
 from langchain_core.runnables import Runnable
-import asyncpg
 
 
 def get_db(request: Request) -> asyncpg.Pool:

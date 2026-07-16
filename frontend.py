@@ -4,9 +4,14 @@ import uuid
 import requests
 import streamlit as st
 
+from src.logger import configure_logging, get_logger
+
 # -----------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------
+configure_logging()
+logger = get_logger(__name__)
+
 st.set_page_config(page_title="ChatBot", layout="wide")
 
 
@@ -84,6 +89,7 @@ def is_authenticated() -> bool:
 
 
 def logout_user() -> None:
+    logger.info("Logging out current frontend session")
     st.session_state.auth_token = ""
     st.session_state.auth_user = None
     st.session_state.current_session_id = str(uuid.uuid4())
@@ -94,11 +100,13 @@ def logout_user() -> None:
 
 def start_new_chat() -> None:
     st.session_state.current_session_id = str(uuid.uuid4())
+    logger.info("Starting new frontend chat session: session_id=%s", st.session_state.current_session_id)
     st.session_state.messages = []
     _set_query_param("current_session_id", st.session_state.current_session_id)
 
 
 def switch_session(session_id: str) -> None:
+    logger.info("Switching frontend session: session_id=%s", session_id)
     st.session_state.current_session_id = session_id
     st.session_state.messages = load_session_history(session_id)
     _set_query_param("current_session_id", session_id)
@@ -126,6 +134,7 @@ def _request_json(
     stream: bool = False,
 ):
     url = f"{backend_url}{path}"
+    logger.debug("Frontend request: method=%s path=%s auth=%s stream=%s", method, path, auth, stream)
     headers = auth_headers() if auth else public_headers()
     response = requests.request(
         method,
@@ -136,6 +145,7 @@ def _request_json(
         timeout=120 if stream else 10,
     )
     if response.status_code == 401 and auth:
+        logger.warning("Frontend request unauthorized: method=%s path=%s", method, path)
         logout_user()
         raise requests.HTTPError("Session expired. Please sign in again.")
     response.raise_for_status()
@@ -169,6 +179,7 @@ def _extract_error_detail(response: requests.Response) -> str:
 
 
 def login_user(email: str, password: str) -> None:
+    logger.debug("Frontend login attempt for email=%s", email.strip().lower())
     response = requests.post(
         f"{backend_url}/auth/login",
         headers=public_headers(),
@@ -178,6 +189,7 @@ def login_user(email: str, password: str) -> None:
     if response.status_code >= 400:
         raise RuntimeError(_extract_error_detail(response))
     data = response.json()
+    logger.info("Frontend login succeeded for email=%s", data["user"].get("email"))
     st.session_state.auth_token = data["access_token"]
     st.session_state.auth_user = data["user"]
     _set_query_param("auth_token", data["access_token"])
@@ -187,6 +199,7 @@ def login_user(email: str, password: str) -> None:
 
 
 def signup_user(email: str, password: str) -> None:
+    logger.debug("Frontend signup attempt for email=%s", email.strip().lower())
     response = requests.post(
         f"{backend_url}/auth/signup",
         headers=public_headers(),
@@ -199,6 +212,7 @@ def signup_user(email: str, password: str) -> None:
             raise ValueError("User already exists")
         raise RuntimeError(detail)
     data = response.json()
+    logger.info("Frontend signup succeeded for email=%s", data["user"].get("email"))
     st.session_state.auth_token = data["access_token"]
     st.session_state.auth_user = data["user"]
     _set_query_param("auth_token", data["access_token"])
@@ -212,10 +226,13 @@ def signup_user(email: str, password: str) -> None:
 def fetch_sessions() -> list[dict]:
     if not is_authenticated():
         return []
+    logger.debug("Fetching sessions for authenticated frontend user")
     try:
         response = _request_json("GET", "/getSessionMetaData", auth=True)
         data = response.json()
-        return data if isinstance(data, list) else data.get("sessions", [])
+        sessions = data if isinstance(data, list) else data.get("sessions", [])
+        logger.info("Fetched frontend sessions: count=%s", len(sessions))
+        return sessions
     except requests.RequestException as e:
         st.sidebar.error(f"Could not load sessions: {e}")
         return []
@@ -224,6 +241,7 @@ def fetch_sessions() -> list[dict]:
 def load_session_history(session_id: str) -> list[dict]:
     if not is_authenticated():
         return []
+    logger.debug("Loading frontend session history: session_id=%s", session_id)
     try:
         response = requests.get(
             f"{backend_url}/getSessionHistory",
@@ -239,6 +257,7 @@ def load_session_history(session_id: str) -> list[dict]:
             return []
         response.raise_for_status()
         history = response.json().get("history", [])
+        logger.info("Loaded frontend session history: session_id=%s count=%s", session_id, len(history))
         return [
             {
                 "role": "user" if item["role"] == "Human" else "assistant",
@@ -271,6 +290,7 @@ def stream_chat_response(session_id: str, user_query: str):
         yield "Please sign in to continue."
         return
 
+    logger.debug("Streaming frontend chat request: session_id=%s query_len=%s", session_id, len(user_query))
     payload = {"session_id": session_id, "user_query": user_query}
     saw_token = False
     try:
@@ -282,6 +302,7 @@ def stream_chat_response(session_id: str, user_query: str):
             timeout=120,
         ) as resp:
             if resp.status_code == 401:
+                logger.warning("Frontend stream unauthorized: session_id=%s", session_id)
                 logout_user()
                 yield "\n\n*(session expired, please sign in again)*"
                 return
@@ -311,6 +332,7 @@ def stream_chat_response(session_id: str, user_query: str):
                                 saw_token = True
                                 yield fallback_answer
     except requests.RequestException as e:
+        logger.exception("Frontend stream request failed: session_id=%s", session_id)
         st.session_state["_last_meta"] = None
         yield f"\n\n*(error contacting backend: {e})*"
 

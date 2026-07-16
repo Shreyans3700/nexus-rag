@@ -1,12 +1,12 @@
 import json
-import logging
 from typing import Any
 
 from langchain_core.messages import AIMessage
 
 from src.database.exceptions import SessionAccessError
+from src.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _serialize_message_content(content: Any) -> str:
@@ -51,6 +51,7 @@ async def update_session_history(
     db,
     title: str | None,
 ) -> bool:
+    logger.debug("Persisting session history: session_id=%s user_id=%s title_present=%s", session_id, user_id, bool(title))
     user_content = _serialize_message_content(user_message)
     ai_content = _serialize_message_content(
         ai_message.content if hasattr(ai_message, "content") else ai_message
@@ -69,6 +70,7 @@ async def update_session_history(
 
                 if session_row is None:
                     session_title = (title or _build_fallback_title(user_content)).strip()
+                    logger.debug("Creating new session row: session_id=%s user_id=%s title=%r", session_id, user_id, session_title[:128])
                     await connection.execute(
                         """
                         INSERT INTO sessions (session_id, user_id, title)
@@ -81,6 +83,7 @@ async def update_session_history(
                 else:
                     stored_user_id = str(session_row["user_id"])
                     if stored_user_id != str(user_id):
+                        logger.warning("Session ownership mismatch: session_id=%s stored_user_id=%s requested_user_id=%s", session_id, stored_user_id, user_id)
                         raise SessionAccessError(
                             "Session does not belong to the current user"
                         )
@@ -110,11 +113,12 @@ async def update_session_history(
                     session_id,
                     user_id,
                 )
+        logger.info("Persisted session history successfully: session_id=%s user_id=%s", session_id, user_id)
         return True
     except SessionAccessError:
         raise
     except Exception:
         logger.exception(
-            "Failed to persist conversation history for session %s", session_id
+            "Failed to persist conversation history for session %s user_id=%s", session_id, user_id
         )
         return False

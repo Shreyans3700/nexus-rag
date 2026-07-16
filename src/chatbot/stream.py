@@ -1,5 +1,4 @@
 import json
-import logging
 import time
 from typing import Any, AsyncGenerator
 
@@ -8,8 +7,9 @@ from langchain_core.messages import AIMessage
 from src.database.exceptions import SessionAccessError
 from src.database.fetch_data import get_session_context_from_db
 from src.database.update_data import update_session_history
+from src.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _extract_text(value: Any) -> str:
@@ -76,6 +76,7 @@ async def stream_answer(
     session_context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if session_context is None:
+        logger.debug("Loading session context for stream chat: session_id=%s user_id=%s", session_id, user_id)
         session_context = await get_session_context_from_db(
             session_id=session_id,
             user_id=user_id,
@@ -97,13 +98,15 @@ async def stream_answer(
 
     title = None
     if not session_context["exists"]:
-        logger.info("New session detected: session=%s", session_id)
+        logger.info("New session detected: session=%s user_id=%s", session_id, user_id)
         title = await title_chain.ainvoke({"query": user_query})
         title = str(title.content).strip() or "New Chat"
-        logger.info("Generated title for session=%s title=%r", session_id, title)
+        logger.info("Generated title for session=%s user_id=%s title=%r", session_id, user_id, title)
 
     final_answer = ""
+    saw_nonempty_chunk = False
     model_name = "unknown"
+    finish_reason = "unknown"
     total_tokens = 0
     latency = 0.0
     start_time = time.perf_counter()
@@ -138,8 +141,9 @@ async def stream_answer(
         event_type = event["event"]
         if event_type in {"on_chat_model_stream", "on_chat_model_end", "on_llm_end", "on_chain_end"}:
             logger.debug(
-                "Stream event received: session=%s event=%s keys=%s",
+                "Stream event received: session=%s user_id=%s event=%s keys=%s",
                 session_id,
+                user_id,
                 event_type,
                 sorted((event.get("data") or {}).keys()),
             )
@@ -148,12 +152,14 @@ async def stream_answer(
             chunk = event["data"]["chunk"]
             chunk_text = _extract_text(getattr(chunk, "content", None))
             logger.debug(
-                "Token chunk: session=%s chunk_len=%s chunk_text=%r",
+                "Token chunk: session=%s user_id=%s chunk_len=%s chunk_text=%r",
                 session_id,
+                user_id,
                 len(chunk_text),
                 _preview(chunk_text),
             )
             if chunk_text:
+                saw_nonempty_chunk = True
                 final_answer += chunk_text
                 yield (
                     f"event: token\n"
@@ -188,12 +194,19 @@ async def stream_answer(
                 latency = time.perf_counter() - start_time
             latency = float(latency)
             model_name = str(model_metadata.get("model_name", "unknown"))
+            finish_reason = str(
+                model_metadata.get("finish_reason")
+                or event_metadata.get("finish_reason")
+                or "unknown"
+            )
             logger.debug(
-                "Stream end event: session=%s model=%s tokens=%s latency=%s output_type=%s final_answer_len=%s final_answer_preview=%r",
+                "Stream end event: session=%s user_id=%s model=%s tokens=%s latency=%s finish_reason=%s output_type=%s final_answer_len=%s final_answer_preview=%r",
                 session_id,
+                user_id,
                 model_name,
                 total_tokens,
                 latency,
+                finish_reason,
                 type(output).__name__ if output is not None else None,
                 len(final_answer),
                 _preview(final_answer),
@@ -202,24 +215,25 @@ async def stream_answer(
     final_answer = final_answer.strip()
     if not final_answer:
         logger.warning(
-            "Empty streamed answer before persistence: session=%s model=%s tokens=%s",
+            "Empty streamed answer before persistence: session=%s user_id=%s model=%s tokens=%s",
             session_id,
+            user_id,
             model_name,
             total_tokens,
         )
 
     logger.info(
-        "Persisting streamed answer: session=%s answer_len=%s model=%s tokens=%s latency=%s preview=%r",
+        "Persisting streamed answer: session=%s user_id=%s answer_len=%s model=%s tokens=%s latency=%s finish_reason=%s preview=%r",
         session_id,
+        user_id,
         len(final_answer),
         model_name,
         total_tokens,
         latency,
+        finish_reason,
         _preview(final_answer),
     )
 
-            if not final_answer and output is not None:
-                final_answer = _extract_text(output)
 
     final_answer = final_answer.strip()
 
@@ -249,9 +263,9 @@ async def stream_answer(
             db=db,
             title=title,
         )
-        logger.info("Persisted streamed answer: session=%s", session_id)
+        logger.info("Persisted streamed answer: session=%s user_id=%s", session_id, user_id)
     except Exception:
-        logger.exception("Failed to persist streamed chat history for session %s", session_id)
+        logger.exception("Failed to persist streamed chat history for session %s user_id=%s", session_id, user_id)
 
     payload = {
         "model": model_name,

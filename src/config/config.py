@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_groq import ChatGroq
 
 from src.config.prompts import system_prompt, title_prompt
+from src.logger import get_logger
 
 MAX_CHAT_TOKENS = int(os.getenv("MAX_CHAT_TOKENS", "2500"))
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
@@ -24,6 +25,8 @@ def required_setting(name: str) -> str:
     return value
 
 
+logger = get_logger(__name__)
+
 llm = ChatGroq(
     model=chat_model,
     api_key=required_setting("GROQ_API_KEY"),
@@ -35,6 +38,7 @@ llm = ChatGroq(
 
 @asynccontextmanager
 async def set_environment(app: FastAPI):
+    logger.info("Initializing application environment")
     app.state.qa_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system_prompt),
@@ -50,6 +54,7 @@ async def set_environment(app: FastAPI):
     )
     app.state.chain = app.state.qa_prompt | llm
     app.state.title_chain = app.state.title_prompt | llm
+    logger.debug("Creating database pool")
     app.state.db = await asyncpg.create_pool(
         host=required_setting("PG_HOST"),
         port=int(required_setting("PG_PORT")),
@@ -62,6 +67,7 @@ async def set_environment(app: FastAPI):
 
     try:
         async with app.state.db.acquire() as connection:
+            logger.debug("Ensuring database schema and indexes")
             await connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -95,6 +101,8 @@ async def set_environment(app: FastAPI):
             await connection.execute(
                 "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT"
             )
+        logger.info("Application environment initialized")
         yield
     finally:
+        logger.info("Closing database pool")
         await app.state.db.close()

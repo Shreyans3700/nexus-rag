@@ -2,11 +2,14 @@ import os
 from typing import Any, List
 
 import tiktoken
+from src.logger import get_logger
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, get_buffer_string, trim_messages
 
 from src.config.config import MAX_CHAT_TOKENS, chat_model
 from src.database.exceptions import SessionAccessError
 from src.schema.models import Session, SessionMetaData
+
+logger = get_logger(__name__)
 
 MESSAGE_MAP = {
     "Human": HumanMessage,
@@ -29,6 +32,7 @@ def _count_tokens(messages: list[BaseMessage] | BaseMessage) -> int:
 
 
 async def get_sessions_from_db(db, user_id: str) -> List[SessionMetaData]:
+    logger.debug("Fetching sessions from DB for user_id=%s", user_id)
     async with db.acquire() as connection:
         sessions = await connection.fetch(
             """
@@ -40,6 +44,7 @@ async def get_sessions_from_db(db, user_id: str) -> List[SessionMetaData]:
             user_id,
         )
 
+    logger.debug("Fetched sessions from DB for user_id=%s count=%s", user_id, len(sessions))
     return [
         SessionMetaData(
             session_id=row["session_id"],
@@ -50,6 +55,7 @@ async def get_sessions_from_db(db, user_id: str) -> List[SessionMetaData]:
 
 
 async def get_session_context_from_db(session_id: str, user_id: str, db) -> dict[str, Any]:
+    logger.debug("Fetching session context: session_id=%s user_id=%s", session_id, user_id)
     async with db.acquire() as connection:
         session_row = await connection.fetchrow(
             """
@@ -69,12 +75,14 @@ async def get_session_context_from_db(session_id: str, user_id: str, db) -> dict
                 """,
                 session_id,
             )
-            return {
+            result = {
                 "exists": False,
                 "foreign": bool(foreign_exists),
                 "title": None,
                 "history": [],
             }
+            logger.debug("Session context missing: session_id=%s user_id=%s foreign=%s", session_id, user_id, result["foreign"])
+            return result
 
         rows = await connection.fetch(
             """
@@ -91,17 +99,20 @@ async def get_session_context_from_db(session_id: str, user_id: str, db) -> dict
         for row in rows
         if row["role"] in MESSAGE_MAP
     ]
-    return {
+    result = {
         "exists": True,
         "foreign": False,
         "title": session_row["title"],
         "history": history,
     }
+    logger.debug("Session context loaded: session_id=%s user_id=%s history_len=%s", session_id, user_id, len(history))
+    return result
 
 
 async def get_session_history_from_db(
     session_id: str, user_id: str, db
 ) -> dict[str, Any] | None:
+    logger.debug("Fetching session history: session_id=%s user_id=%s", session_id, user_id)
     context = await get_session_context_from_db(session_id=session_id, user_id=user_id, db=db)
     if context["foreign"] or not context["exists"]:
         return None
@@ -121,10 +132,12 @@ async def get_session_history_from_db(
         Session(sequence_no=row["id"], role=row["role"], content=row["content"])
         for row in rows
     ]
+    logger.debug("Fetched session history rows: session_id=%s user_id=%s count=%s", session_id, user_id, len(history))
     return {"history": history, "title": context["title"]}
 
 
 async def get_session_history(session_id: str, user_id: str, db):
+    logger.debug("Fetching session history: session_id=%s user_id=%s", session_id, user_id)
     context = await get_session_context_from_db(session_id=session_id, user_id=user_id, db=db)
     if context["foreign"]:
         raise SessionAccessError("Session does not belong to the current user")

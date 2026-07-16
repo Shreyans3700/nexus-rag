@@ -2,7 +2,11 @@ import uvicorn
 from fastapi import FastAPI
 
 from src.config.config import set_environment
+from src.logger import configure_logging, get_logger
 from src.routes import auth_router, chat_router, sessions_router
+
+configure_logging()
+logger = get_logger(__name__)
 
 app = FastAPI(
     title="EndToEndChatBot",
@@ -18,6 +22,7 @@ app.include_router(sessions_router)
 
 @app.get("/")
 async def index():
+    logger.debug("Health check requested")
     return {"service": "EndToEndChatBot", "status": "ok"}
 
 
