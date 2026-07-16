@@ -33,6 +33,7 @@ llm = ChatGroq(
     reasoning_format="hidden",
     temperature=0.6,
     max_retries=3,
+    max_tokens=6000
 )
 
 

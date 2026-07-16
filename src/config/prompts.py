@@ -21,6 +21,7 @@ system_prompt = """
     - Use bullet points for lists.
     - Explain complex concepts step by step.
     - Provide examples when helpful.
+    - Keep the answer in the limit of 6000 characters.
 
     If the request is ambiguous:
     - Ask one concise clarifying question before answering.

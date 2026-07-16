@@ -1,4 +1,3 @@
-import os
 from typing import Any, List
 
 import tiktoken
@@ -6,7 +5,6 @@ from src.logger import get_logger
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, get_buffer_string, trim_messages
 
 from src.config.config import MAX_CHAT_TOKENS, chat_model
-from src.database.exceptions import SessionAccessError
 from src.schema.models import Session, SessionMetaData
 
 logger = get_logger(__name__)
@@ -99,13 +97,26 @@ async def get_session_context_from_db(session_id: str, user_id: str, db) -> dict
         for row in rows
         if row["role"] in MESSAGE_MAP
     ]
+    trimmed_history = trim_messages(
+        history,
+        max_tokens=MAX_CHAT_TOKENS,
+        token_counter=_count_tokens,
+        strategy="last",
+        allow_partial=True,
+    )
     result = {
         "exists": True,
         "foreign": False,
         "title": session_row["title"],
-        "history": history,
+        "history": trimmed_history,
     }
-    logger.debug("Session context loaded: session_id=%s user_id=%s history_len=%s", session_id, user_id, len(history))
+    logger.debug(
+        "Session context loaded: session_id=%s user_id=%s history_len=%s trimmed_len=%s",
+        session_id,
+        user_id,
+        len(history),
+        len(trimmed_history),
+    )
     return result
 
 
@@ -136,20 +147,3 @@ async def get_session_history_from_db(
     return {"history": history, "title": context["title"]}
 
 
-async def get_session_history(session_id: str, user_id: str, db):
-    logger.debug("Fetching session history: session_id=%s user_id=%s", session_id, user_id)
-    context = await get_session_context_from_db(session_id=session_id, user_id=user_id, db=db)
-    if context["foreign"]:
-        raise SessionAccessError("Session does not belong to the current user")
-
-    history = context["history"]
-    if not history:
-        return []
-
-    return trim_messages(
-        history,
-        max_tokens=MAX_CHAT_TOKENS,
-        token_counter=_count_tokens,
-        strategy="last",
-        allow_partial=True,
-    )
