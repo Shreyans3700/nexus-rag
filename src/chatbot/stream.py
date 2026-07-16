@@ -48,6 +48,24 @@ def _preview(text: str, limit: int = 200) -> str:
     return clean[:limit] + "..."
 
 
+def _extract_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "content"):
+        value = getattr(value, "content")
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text", item)))
+            elif hasattr(item, "content"):
+                parts.append(str(getattr(item, "content")))
+            else:
+                parts.append(str(item))
+        return "".join(parts)
+    return str(value)
+
+
 async def stream_answer(
     session_id: str,
     user_id: str,
@@ -199,6 +217,17 @@ async def stream_answer(
         latency,
         _preview(final_answer),
     )
+
+            if not final_answer and output is not None:
+                final_answer = _extract_text(output)
+
+    final_answer = final_answer.strip()
+
+    if final_answer and not saw_nonempty_chunk:
+        yield (
+            "event: token\n"
+            f"data: {json.dumps({'token': final_answer})}\n\n"
+        )
 
     final_ai_message = AIMessage(
         content=final_answer,
