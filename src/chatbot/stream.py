@@ -228,6 +228,7 @@ async def stream_answer(
         "model": model_name,
         "tokens": total_tokens,
         "latency": latency,
+        "answer": final_answer,
     }
 
     yield ("event: done\n" f"data: {json.dumps(payload)}\n\n")

@@ -19,10 +19,40 @@ def get_secret(key: str, default: str = "") -> str:
 
 DEFAULT_BACKEND_URL = get_secret("BACKEND_URL", "http://localhost:8000")
 
-with st.sidebar:
-    st.markdown("### Connection")
-    backend_url = st.text_input("Backend URL", value=DEFAULT_BACKEND_URL).rstrip("/")
-    st.divider()
+
+def _get_query_params() -> dict[str, str]:
+    try:
+        params = st.query_params
+        return {key: str(value) for key, value in params.items() if value is not None}
+    except Exception:
+        try:
+            params = st.experimental_get_query_params()
+            return {key: value[0] for key, value in params.items() if value}
+        except Exception:
+            return {}
+
+
+def _set_query_param(key: str, value: str) -> None:
+    try:
+        st.query_params[key] = value
+    except Exception:
+        try:
+            st.experimental_set_query_params(**{key: value})
+        except Exception:
+            pass
+
+
+def _clear_query_params() -> None:
+    try:
+        st.query_params.clear()
+    except Exception:
+        try:
+            st.experimental_set_query_params()
+        except Exception:
+            pass
+
+
+backend_url = DEFAULT_BACKEND_URL.rstrip("/")
 
 
 # -----------------------------------------------------------------------
@@ -37,6 +67,17 @@ if "current_session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+_persisted = _get_query_params()
+if not st.session_state.auth_token and _persisted.get("auth_token"):
+    st.session_state.auth_token = _persisted.get("auth_token", "")
+if st.session_state.auth_user is None and _persisted.get("auth_user"):
+    try:
+        st.session_state.auth_user = json.loads(_persisted["auth_user"])
+    except json.JSONDecodeError:
+        st.session_state.auth_user = None
+if _persisted.get("current_session_id"):
+    st.session_state.current_session_id = _persisted["current_session_id"]
+
 
 def is_authenticated() -> bool:
     return bool(st.session_state.auth_token)
@@ -48,16 +89,19 @@ def logout_user() -> None:
     st.session_state.current_session_id = str(uuid.uuid4())
     st.session_state.messages = []
     st.session_state.pop("_last_meta", None)
+    _clear_query_params()
 
 
 def start_new_chat() -> None:
     st.session_state.current_session_id = str(uuid.uuid4())
     st.session_state.messages = []
+    _set_query_param("current_session_id", st.session_state.current_session_id)
 
 
 def switch_session(session_id: str) -> None:
     st.session_state.current_session_id = session_id
     st.session_state.messages = load_session_history(session_id)
+    _set_query_param("current_session_id", session_id)
 
 
 def auth_headers() -> dict[str, str]:
@@ -98,6 +142,16 @@ def _request_json(
     return response
 
 
+def _hydrate_session_from_persistence() -> None:
+    if not is_authenticated():
+        return
+    if st.session_state.messages:
+        return
+    current_session_id = st.session_state.current_session_id
+    if current_session_id:
+        st.session_state.messages = load_session_history(current_session_id)
+
+
 # -----------------------------------------------------------------------
 # Auth helpers
 # -----------------------------------------------------------------------
@@ -126,6 +180,8 @@ def login_user(email: str, password: str) -> None:
     data = response.json()
     st.session_state.auth_token = data["access_token"]
     st.session_state.auth_user = data["user"]
+    _set_query_param("auth_token", data["access_token"])
+    _set_query_param("auth_user", json.dumps(data["user"]))
     start_new_chat()
 
 
@@ -145,6 +201,8 @@ def signup_user(email: str, password: str) -> None:
     data = response.json()
     st.session_state.auth_token = data["access_token"]
     st.session_state.auth_user = data["user"]
+    _set_query_param("auth_token", data["access_token"])
+    _set_query_param("auth_user", json.dumps(data["user"]))
     start_new_chat()
 
 
@@ -177,6 +235,8 @@ def load_session_history(session_id: str) -> list[dict]:
             logout_user()
             st.sidebar.error("Session expired. Please sign in again.")
             return []
+        if response.status_code == 404:
+            return []
         response.raise_for_status()
         history = response.json().get("history", [])
         return [
@@ -191,12 +251,28 @@ def load_session_history(session_id: str) -> list[dict]:
         return []
 
 
+
+def _hydrate_session_from_persistence() -> None:
+    if not is_authenticated():
+        return
+    if st.session_state.messages:
+        return
+    sessions = fetch_sessions()
+    session_ids = {s.get("session_id") for s in sessions if s.get("session_id")}
+    current_session_id = st.session_state.current_session_id
+    if current_session_id and current_session_id in session_ids:
+        st.session_state.messages = load_session_history(current_session_id)
+
+
+_hydrate_session_from_persistence()
+
 def stream_chat_response(session_id: str, user_query: str):
     if not is_authenticated():
         yield "Please sign in to continue."
         return
 
     payload = {"session_id": session_id, "user_query": user_query}
+    saw_token = False
     try:
         with requests.post(
             f"{backend_url}/chat/stream",
@@ -223,13 +299,20 @@ def stream_chat_response(session_id: str, user_query: str):
                     except json.JSONDecodeError:
                         continue
                     if event_name == "token":
-                        yield data.get("token", "")
+                        token = data.get("token", "")
+                        if token:
+                            saw_token = True
+                            yield token
                     elif event_name == "done":
                         st.session_state["_last_meta"] = data
+                        if not saw_token:
+                            fallback_answer = (data.get("answer") or "").strip()
+                            if fallback_answer:
+                                saw_token = True
+                                yield fallback_answer
     except requests.RequestException as e:
         st.session_state["_last_meta"] = None
         yield f"\n\n*(error contacting backend: {e})*"
-
 
 # -----------------------------------------------------------------------
 # Sidebar: auth and sessions

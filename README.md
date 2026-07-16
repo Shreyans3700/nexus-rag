@@ -105,6 +105,7 @@ The `frontend.py` Streamlit app provides a simple chat UI with login and signup.
 - The frontend stores the JWT in session state and uses it for all backend requests.
 - Sessions and history are visible only for the current user.
 - Logging out clears the local token and chat state.
+- The backend URL is not shown in the UI; it is taken from `BACKEND_URL` in `.streamlit/secrets.toml` when provided, otherwise it defaults to `http://localhost:8000`.
 
 If you prefer to keep secrets out of your code, create a `.streamlit/secrets.toml` file with:
 
