@@ -1,13 +1,13 @@
 # EndToEndChatBot
 
-EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and Groq to generate responses while keeping chat history in PostgreSQL for each authenticated user.
+EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and OpenAI to generate responses while keeping chat history in PostgreSQL for each authenticated user.
 
 ## Features
 
 - FastAPI backend with chat and streaming endpoints
 - JWT-based signup and login
 - Persistent user, session, and message history in PostgreSQL
-- LangChain prompt chaining with a Groq LLM
+- LangChain prompt chaining with an OpenAI chat model
 - Configurable recent-message context window via environment variable
 - Docker support for containerized deployment
 
@@ -16,7 +16,7 @@ EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and G
 - Python 3.11
 - FastAPI
 - LangChain
-- LangChain Groq
+- LangChain OpenAI
 - asyncpg
 - PostgreSQL
 - Streamlit
@@ -28,7 +28,7 @@ Before running the project, make sure you have:
 
 - Python 3.11+
 - PostgreSQL running and reachable
-- A Groq API key for the backend model
+- An OpenAI API key for the backend model
 - A strong JWT secret for signing user tokens
 
 ## Environment Variables
@@ -36,11 +36,11 @@ Before running the project, make sure you have:
 Create a `.env` file in the project root with the following variables:
 
 ```env
-GROQ_API_KEY=your_groq_api_key
+OPENAI_API_KEY=your_openai_api_key
 JWT_SECRET=your_long_random_jwt_secret
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 PASSWORD_HASH_ITERATIONS=210000
-GROQ_MODEL=qwen/qwen3.6-27b
+LLM_MODEL=gpt-4o-mini
 PG_HOST=localhost
 PG_PORT=5432
 PG_DATABASE=LangchainDB
@@ -51,6 +51,8 @@ MAX_CHAT_TOKENS=2500
 ```
 
 The app expects a PostgreSQL database named `LangchainDB`.
+
+The app reads the model name from `LLM_MODEL` in `src/config/config.py` by default.
 
 ## Local Development
 
@@ -183,5 +185,5 @@ docker run --env-file .env -p 8000:8000 chatbot
 - Session titles are stored on the session row and scoped to the signed-in user.
 - The context sent to the model is trimmed to the most recent configured number of messages to avoid excessive prompt size.
 - If you want to change the context window size, update `MAX_CHAT_HISTORY_MESSAGES` in your `.env` file.
-
+- The backend model is now configured through OpenAI, so make sure `OPENAI_API_KEY` is set before starting the app.
 - The streaming endpoint falls back to the final end-of-stream answer when a model emits empty chunks, which prevents blank summarization responses in the UI.

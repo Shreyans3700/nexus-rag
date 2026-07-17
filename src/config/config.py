@@ -4,8 +4,7 @@ from contextlib import asynccontextmanager
 import asyncpg
 from fastapi import FastAPI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_groq import ChatGroq
-
+from langchain_openai import ChatOpenAI
 from src.config.prompts import system_prompt, title_prompt
 from src.logger import get_logger
 
@@ -15,7 +14,7 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
 )
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "210000"))
 
-chat_model = os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b")
+chat_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 
 def required_setting(name: str) -> str:
@@ -27,10 +26,9 @@ def required_setting(name: str) -> str:
 
 logger = get_logger(__name__)
 
-llm = ChatGroq(
+llm = ChatOpenAI(
     model=chat_model,
-    api_key=required_setting("GROQ_API_KEY"),
-    reasoning_format="hidden",
+    api_key=required_setting("OPENAI_API_KEY"),
     temperature=0.6,
     max_retries=3,
     max_tokens=6000
