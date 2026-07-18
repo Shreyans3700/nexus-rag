@@ -3,21 +3,22 @@ from fastapi import FastAPI
 
 from src.config.config import set_environment
 from src.logger import configure_logging, get_logger
-from src.routes import auth_router, chat_router, sessions_router
+from src.routes import auth_router, chat_router, documents_router, sessions_router
 
 configure_logging()
 logger = get_logger(__name__)
 
 app = FastAPI(
     title="EndToEndChatBot",
-    description="Complete Chatbot with persistent history",
-    version="0.0.1",
+    description="Complete Chatbot with persistent history and RAG",
+    version="0.1.0",
     lifespan=set_environment,
 )
 
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(sessions_router)
+app.include_router(documents_router)
 
 
 @app.get("/")

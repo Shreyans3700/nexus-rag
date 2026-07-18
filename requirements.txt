@@ -9,3 +9,9 @@ uvicorn==0.51.0
 streamlit>=1.38
 requests>=2.32
 tiktoken>=0.7.0
+# RAG dependencies
+pymilvus==2.5.8
+pypdf==5.1.0
+python-docx==1.1.2
+python-multipart==0.0.20
+numpy>=1.26.0
