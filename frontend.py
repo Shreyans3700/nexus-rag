@@ -240,6 +240,14 @@ def public_headers() -> dict[str, str]:
     return {"Content-Type": "application/json"}
 
 
+def upload_headers() -> dict[str, str]:
+    # No Content-Type here on purpose — requests sets the correct
+    # multipart/form-data boundary itself when `files=` is used.
+    if not is_authenticated():
+        return {}
+    return {"Authorization": f"Bearer {st.session_state.auth_token}"}
+
+
 def _request_json(
     method: str,
     path: str,
@@ -327,6 +335,102 @@ def signup_user(email: str, password: str) -> None:
 # -----------------------------------------------------------------------
 # Backend calls
 # -----------------------------------------------------------------------
+def upload_documents(files) -> dict:
+    """Send uploaded files to the backend for ingestion.
+
+    Sends files as multipart/form-data together with the current session_id
+    so the backend can scope the document chunks to this session.
+    """
+    if not is_authenticated():
+        raise RuntimeError("Sign in to upload documents.")
+    logger.debug("Uploading %s document(s)", len(files))
+    files_payload = [
+        ("files", (f.name, f.getvalue(), f.type or "application/octet-stream"))
+        for f in files
+    ]
+    # session_id must be sent as a form field alongside the files
+    data_payload = {"session_id": st.session_state.current_session_id}
+    response = requests.post(
+        f"{backend_url}/documents/upload",
+        headers=upload_headers(),
+        files=files_payload,
+        data=data_payload,
+        timeout=180,
+    )
+    if response.status_code == 401:
+        logout_user()
+        raise RuntimeError("Session expired. Please sign in again.")
+    if response.status_code >= 400:
+        raise RuntimeError(_extract_error_detail(response))
+    logger.info("Uploaded %s document(s) successfully", len(files))
+    return response.json()
+
+
+def fetch_document_status(session_id: str) -> list[dict]:
+    """Fetch the current ingestion status of all documents for a session."""
+    if not is_authenticated():
+        return []
+    try:
+        response = requests.get(
+            f"{backend_url}/documents",
+            headers=auth_headers(),
+            params={"session_id": session_id},
+            timeout=10,
+        )
+        if response.status_code == 401:
+            logout_user()
+            return []
+        if response.status_code >= 400:
+            return []
+        return response.json()
+    except requests.RequestException:
+        return []
+
+
+def poll_ingestion_status(session_id: str, filenames: list[str]) -> None:
+    """Block (with a live status table) until all uploaded docs are no longer 'processing'.
+
+    Shows a compact status indicator inside the chat area.  Gives up after
+    30 seconds to avoid blocking the UI indefinitely on a failure.
+    """
+    import time as _time
+
+    status_placeholder = st.empty()
+    deadline = _time.monotonic() + 30
+    pending = set(filenames)
+
+    while pending and _time.monotonic() < deadline:
+        docs = fetch_document_status(session_id)
+        # Build a quick lookup by filename
+        status_by_name: dict[str, str] = {}
+        for doc in docs:
+            name = doc.get("filename", "")
+            s = doc.get("status", "processing")
+            # Keep the worst status if the same filename was uploaded multiple times
+            if name not in status_by_name or s == "failed":
+                status_by_name[name] = s
+
+        lines = []
+        still_pending = set()
+        for fname in filenames:
+            s = status_by_name.get(fname, "processing")
+            icon = {"ready": "✅", "failed": "❌", "processing": "⏳"}.get(s, "⏳")
+            lines.append(f"{icon} **{fname}** — {s}")
+            if s == "processing":
+                still_pending.add(fname)
+
+        status_placeholder.markdown("\n\n".join(lines))
+
+        if not still_pending:
+            break
+        pending = still_pending
+        _time.sleep(2)
+        # Streamlit re-runs on rerun, so we can't use st.rerun() inside a loop;
+        # the sleep+loop approach works here because we're inside a single run.
+
+    status_placeholder.empty()
+
+
 def fetch_sessions() -> list[dict]:
     if not is_authenticated():
         return []
@@ -568,24 +672,67 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Ask a question about your documents..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+chat_submission = st.chat_input(
+    "Ask a question, or attach documents...",
+    accept_file="multiple",
+    file_type=["pdf", "txt", "md", "docx", "csv"],
+)
+
+if chat_submission:
+    query_text = (chat_submission.text or "").strip()
+    attached_files = chat_submission.files or []
+
+    # 1. If files were attached, upload/ingest them first so the backend
+    #    can use them as context for the query in the same turn.
+    upload_error = None
+    if attached_files:
+        with st.spinner(f"Uploading {len(attached_files)} file(s)..."):
+            try:
+                upload_documents(attached_files)
+            except (RuntimeError, requests.RequestException) as exc:
+                upload_error = str(exc)
+
+        # Poll ingestion status so the user knows when documents are ready.
+        # We only poll when upload succeeded — no point waiting on a failed upload.
+        if not upload_error:
+            uploaded_names = [f.name for f in attached_files]
+            poll_ingestion_status(st.session_state.current_session_id, uploaded_names)
+
+    # 2. Build the user-facing message: an attachment note (if any) plus
+    #    whatever text they typed.
+    display_parts = []
+    if attached_files:
+        file_names = ", ".join(f.name for f in attached_files)
+        if upload_error:
+            display_parts.append(f"📎 *Attached but failed to upload:* {file_names}\n\n*Error: {upload_error}*")
+        else:
+            display_parts.append(f"📎 *Attached:* {file_names}")
+    if query_text:
+        display_parts.append(query_text)
+    user_display_content = "\n\n".join(display_parts) if display_parts else "📎 Uploaded documents."
+
+    st.session_state.messages.append({"role": "user", "content": user_display_content})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(user_display_content)
 
-    with st.chat_message("assistant"):
-        answer = st.write_stream(
-            stream_chat_response(st.session_state.current_session_id, prompt)
-        )
+    # 3. Only hit the chat endpoint if there's an actual question — a
+    #    files-only submission just ingests, it doesn't need an answer.
+    if query_text:
+        with st.chat_message("assistant"):
+            answer = st.write_stream(
+                stream_chat_response(st.session_state.current_session_id, query_text)
+            )
+        st.session_state.messages.append({"role": "assistant", "content": answer})
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
-
-    meta = st.session_state.pop("_last_meta", None)
-    if meta:
-        latency = meta.get("latency")
-        latency_str = f"{latency:.2f}s" if isinstance(latency, (int, float)) else "n/a"
-        st.markdown(
-            f'<div class="response-meta">{meta.get("model", "unknown")} '
-            f'· {meta.get("tokens", "n/a")} tokens · {latency_str}</div>',
-            unsafe_allow_html=True,
-        )
+        meta = st.session_state.pop("_last_meta", None)
+        if meta:
+            latency = meta.get("latency")
+            latency_str = f"{latency:.2f}s" if isinstance(latency, (int, float)) else "n/a"
+            st.markdown(
+                f'<div class="response-meta">{meta.get("model", "unknown")} '
+                f'· {meta.get("tokens", "n/a")} tokens · {latency_str}</div>',
+                unsafe_allow_html=True,
+            )
+    elif not upload_error:
+        with st.chat_message("assistant"):
+            st.markdown("Got it — ask me a question about that whenever you're ready.")

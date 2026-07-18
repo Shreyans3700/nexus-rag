@@ -7,45 +7,10 @@ from langchain_core.messages import AIMessage
 from src.database.exceptions import SessionAccessError
 from src.database.fetch_data import get_session_context_from_db
 from src.database.update_data import update_session_history
+from src.documents.retriever import retrieve_context
 from src.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-def _extract_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        parts = []
-        for item in value:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text")
-                if text:
-                    parts.append(str(text))
-            else:
-                text = getattr(item, "content", None)
-                if text:
-                    parts.append(str(text))
-        return "\n".join(part for part in parts if part)
-    if hasattr(value, "content"):
-        return _extract_text(value.content)
-    if isinstance(value, dict):
-        for key in ("content", "output", "text"):
-            text = value.get(key)
-            if text:
-                return _extract_text(text)
-    return str(value)
-
-
-def _preview(text: str, limit: int = 200) -> str:
-    clean = text.replace("\n", " ").strip()
-    if len(clean) <= limit:
-        return clean
-    return clean[:limit] + "..."
 
 
 def _extract_text(value: Any) -> str:
@@ -66,6 +31,11 @@ def _extract_text(value: Any) -> str:
     return str(value)
 
 
+def _preview(text: str, limit: int = 200) -> str:
+    clean = text.replace("\n", " ").strip()
+    return clean[:limit] + "..." if len(clean) > limit else clean
+
+
 async def stream_answer(
     session_id: str,
     user_id: str,
@@ -73,10 +43,15 @@ async def stream_answer(
     db,
     chain,
     title_chain,
+    milvus_client,
     session_context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if session_context is None:
-        logger.debug("Loading session context for stream chat: session_id=%s user_id=%s", session_id, user_id)
+        logger.debug(
+            "Loading session context for stream chat: session_id=%s user_id=%s",
+            session_id,
+            user_id,
+        )
         session_context = await get_session_context_from_db(
             session_id=session_id,
             user_id=user_id,
@@ -96,13 +71,47 @@ async def stream_answer(
         len(user_query),
     )
 
+    # ------------------------------------------------------------------
+    # Generate session title for new sessions
+    # ------------------------------------------------------------------
     title = None
     if not session_context["exists"]:
         logger.info("New session detected: session=%s user_id=%s", session_id, user_id)
         title = await title_chain.ainvoke({"query": user_query})
         title = str(title.content).strip() or "New Chat"
-        logger.info("Generated title for session=%s user_id=%s title=%r", session_id, user_id, title)
+        logger.info(
+            "Generated title for session=%s user_id=%s title=%r",
+            session_id,
+            user_id,
+            title,
+        )
 
+    # ------------------------------------------------------------------
+    # Retrieve RAG context (graceful fallback to "" on any error)
+    # ------------------------------------------------------------------
+    context_str = ""
+    try:
+        context_str = await retrieve_context(
+            query=user_query,
+            session_id=session_id,
+            db=db,
+            milvus_client=milvus_client,
+        )
+        logger.debug(
+            "Retrieved context: session_id=%s context_chars=%s",
+            session_id,
+            len(context_str),
+        )
+    except Exception:
+        logger.warning(
+            "Retrieval failed — proceeding without RAG context: session_id=%s",
+            session_id,
+            exc_info=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Stream the chain response
+    # ------------------------------------------------------------------
     final_answer = ""
     saw_nonempty_chunk = False
     model_name = "unknown"
@@ -135,26 +144,18 @@ async def stream_answer(
         {
             "chat_history": history,
             "query": user_query,
+            "context": context_str,
         },
         version="v2",
     ):
         event_type = event["event"]
-        if event_type in {"on_chat_model_stream", "on_chat_model_end", "on_llm_end", "on_chain_end"}:
-            logger.debug(
-                "Stream event received: session=%s user_id=%s event=%s keys=%s",
-                session_id,
-                user_id,
-                event_type,
-                sorted((event.get("data") or {}).keys()),
-            )
 
         if event_type == "on_chat_model_stream":
             chunk = event["data"]["chunk"]
             chunk_text = _extract_text(getattr(chunk, "content", None))
             logger.debug(
-                "Token chunk: session=%s user_id=%s chunk_len=%s chunk_text=%r",
+                "Token chunk: session=%s chunk_len=%s preview=%r",
                 session_id,
-                user_id,
                 len(chunk_text),
                 _preview(chunk_text),
             )
@@ -199,43 +200,17 @@ async def stream_answer(
                 or event_metadata.get("finish_reason")
                 or "unknown"
             )
-            logger.debug(
-                "Stream end event: session=%s user_id=%s model=%s tokens=%s latency=%s finish_reason=%s output_type=%s final_answer_len=%s final_answer_preview=%r",
-                session_id,
-                user_id,
-                model_name,
-                total_tokens,
-                latency,
-                finish_reason,
-                type(output).__name__ if output is not None else None,
-                len(final_answer),
-                _preview(final_answer),
-            )
 
     final_answer = final_answer.strip()
+
     if not final_answer:
         logger.warning(
-            "Empty streamed answer before persistence: session=%s user_id=%s model=%s tokens=%s",
+            "Empty streamed answer: session=%s user_id=%s model=%s tokens=%s",
             session_id,
             user_id,
             model_name,
             total_tokens,
         )
-
-    logger.info(
-        "Persisting streamed answer: session=%s user_id=%s answer_len=%s model=%s tokens=%s latency=%s finish_reason=%s preview=%r",
-        session_id,
-        user_id,
-        len(final_answer),
-        model_name,
-        total_tokens,
-        latency,
-        finish_reason,
-        _preview(final_answer),
-    )
-
-
-    final_answer = final_answer.strip()
 
     if final_answer and not saw_nonempty_chunk:
         yield (
@@ -243,6 +218,9 @@ async def stream_answer(
             f"data: {json.dumps({'token': final_answer})}\n\n"
         )
 
+    # ------------------------------------------------------------------
+    # Persist conversation history
+    # ------------------------------------------------------------------
     final_ai_message = AIMessage(
         content=final_answer,
         response_metadata={
@@ -263,15 +241,22 @@ async def stream_answer(
             db=db,
             title=title,
         )
-        logger.info("Persisted streamed answer: session=%s user_id=%s", session_id, user_id)
+        logger.info(
+            "Persisted streamed answer: session=%s user_id=%s model=%s tokens=%s latency=%s",
+            session_id,
+            user_id,
+            model_name,
+            total_tokens,
+            latency,
+        )
     except Exception:
-        logger.exception("Failed to persist streamed chat history for session %s user_id=%s", session_id, user_id)
+        logger.exception(
+            "Failed to persist streamed chat history: session=%s user_id=%s",
+            session_id,
+            user_id,
+        )
 
-    payload = {
-        "model": model_name,
-        "tokens": total_tokens,
-        "latency": latency,
-        "answer": final_answer,
-    }
-
-    yield ("event: done\n" f"data: {json.dumps(payload)}\n\n")
+    yield (
+        "event: done\n"
+        f"data: {json.dumps({'model': model_name, 'tokens': total_tokens, 'latency': latency, 'answer': final_answer})}\n\n"
+    )
