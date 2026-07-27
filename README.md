@@ -10,8 +10,8 @@ EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and O
 - LangChain prompt chaining with an OpenAI chat model
 - Configurable recent-message context window via environment variable
 - **RAG pipeline**: upload PDF, DOCX, TXT, MD, or CSV files per session
-- **Milvus vector store** for fast semantic search (with automatic Postgres fallback)
-- **Dual-write resilience**: chunk text stored in Postgres `document_chunks` so Milvus can be rebuilt at any time
+- **Milvus hybrid search**: semantic vectors + BM25 keyword ranking fused with RRF
+- **User-aware retrieval**: searches the current session first, then the user's other sessions when the current session has no documents
 - Background document ingestion (upload returns instantly, embedding happens async)
 - Docker support for containerized deployment
 
@@ -60,6 +60,8 @@ MILVUS_HOST=localhost
 MILVUS_PORT=19530
 MILVUS_COLLECTION_NAME=doc_chunks
 MILVUS_TOP_K=5
+MILVUS_HYBRID_CANDIDATE_K=20
+MILVUS_RRF_K=60
 ```
 
 ## Local Development
@@ -112,11 +114,11 @@ The API will be available at `http://localhost:8000` and the frontend at `http:/
 2. In the chat input, attach one or more files (PDF, DOCX, TXT, MD, CSV).
 3. The frontend shows per-file ingestion status (⏳ processing → ✅ ready).
 4. Once ready, ask questions — answers will be grounded in your document content.
-5. Documents are scoped to the current session. New sessions start fresh.
+5. Documents in the current session are searched first. If it has no indexed documents, the search includes the user's documents from other sessions.
 
-### Resilience
+### Milvus migration
 
-Chunk text is stored in PostgreSQL `document_chunks` as well as in Milvus. If Milvus is unavailable or its data is lost, the retriever automatically falls back to Postgres, re-embeds the chunks, restores them to Milvus, and continues serving queries without downtime.
+The hybrid schema is incompatible with the old dense-only collection. Before deploying this version, drop the existing `doc_chunks` collection in Milvus, restart the API, and upload documents again. If existing Postgres document rows are retained, clear them first as well so the UI does not show stale documents as ready. This version does not rebuild Milvus automatically.
 
 ## API Endpoints
 
