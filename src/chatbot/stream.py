@@ -94,7 +94,7 @@ async def stream_answer(
         context_str = await retrieve_context(
             query=user_query,
             session_id=session_id,
-            db=db,
+            user_id=user_id,
             milvus_client=milvus_client,
         )
         logger.debug(

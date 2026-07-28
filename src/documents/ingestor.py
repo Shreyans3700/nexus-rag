@@ -73,6 +73,7 @@ async def ingest_document(
             document_id=document_id,
             user_id=user_id,
             session_id=session_id,
+            filename=filename,
             db=db,
             milvus_client=milvus_client,
         )

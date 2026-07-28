@@ -1,6 +1,6 @@
 """
-Embedding service — embeds text chunks with OpenAI and writes them to both
-Milvus (for fast vector search) and PostgreSQL (for disaster-recovery fallback).
+Embedding service — embeds text chunks with OpenAI and writes them to Milvus
+and PostgreSQL.
 
 Dual-write strategy:
   1. Embed all chunks in a single batched OpenAI API call.
@@ -9,8 +9,7 @@ Dual-write strategy:
   4. Return the count of chunks stored.
 
 If Postgres write succeeds but Milvus upsert fails, we log the error and re-raise
-so the ingestor can mark the document as 'failed'.  The Postgres rows remain and
-act as the source of truth for a future re-ingestion attempt.
+so the ingestor can mark the document as 'failed'.
 """
 import uuid
 
@@ -39,6 +38,7 @@ async def embed_and_store(
     document_id: str,
     user_id: str,
     session_id: str,
+    filename: str,
     db,
     milvus_client: MilvusClient,
 ) -> int:
@@ -49,6 +49,7 @@ async def embed_and_store(
         document_id:  UUID of the parent document row in Postgres.
         user_id:      ID of the owning user (for scoping / filtering).
         session_id:   ID of the chat session (for scoping / filtering).
+        filename:     Original filename (stored as source metadata in Milvus).
         db:           asyncpg connection pool.
         milvus_client: Connected MilvusClient instance.
 
@@ -84,7 +85,7 @@ async def embed_and_store(
         raise RuntimeError(f"Embedding failed: {exc}") from exc
 
     # ------------------------------------------------------------------
-    # 2. Bulk-insert into Postgres document_chunks (resilience fallback)
+    # 2. Bulk-insert into Postgres document_chunks
     # ------------------------------------------------------------------
     chunk_ids = [str(uuid.uuid4()) for _ in chunks]
 
@@ -125,8 +126,9 @@ async def embed_and_store(
             "user_id": user_id,
             "session_id": session_id,
             "chunk_index": i,
+            "filename": _truncate(filename, 512),
             "text": _truncate(chunks[i]),
-            "vector": vectors[i],
+            "dense_vector": vectors[i],
         }
         for i in range(len(chunks))
     ]

@@ -5,7 +5,7 @@ import asyncpg
 from fastapi import FastAPI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
-from pymilvus import MilvusClient, DataType
+from pymilvus import DataType, Function, FunctionType, MilvusClient
 
 from src.config.prompts import system_prompt, title_prompt
 from src.logger import get_logger
@@ -23,6 +23,8 @@ MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
 MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
 MILVUS_COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME", "doc_chunks")
 MILVUS_TOP_K = int(os.getenv("MILVUS_TOP_K", "5"))
+MILVUS_HYBRID_CANDIDATE_K = int(os.getenv("MILVUS_HYBRID_CANDIDATE_K", "20"))
+MILVUS_RRF_K = int(os.getenv("MILVUS_RRF_K", "60"))
 # token format: "username:password" — default Milvus root credentials are root:Milvus
 MILVUS_TOKEN = os.getenv("MILVUS_TOKEN", "root:Milvus")
 
@@ -61,15 +63,30 @@ def _bootstrap_milvus_collection(client: MilvusClient, collection_name: str) -> 
     schema.add_field("user_id", DataType.VARCHAR, max_length=128)
     schema.add_field("session_id", DataType.VARCHAR, max_length=128)
     schema.add_field("chunk_index", DataType.INT32)
-    schema.add_field("text", DataType.VARCHAR, max_length=4096)
-    schema.add_field("vector", DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM)
+    schema.add_field("filename", DataType.VARCHAR, max_length=512)
+    schema.add_field("text", DataType.VARCHAR, max_length=4096, enable_analyzer=True)
+    schema.add_field("dense_vector", DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM)
+    schema.add_field("sparse_vector", DataType.SPARSE_FLOAT_VECTOR)
+    schema.add_function(
+        Function(
+            name="text_bm25",
+            function_type=FunctionType.BM25,
+            input_field_names=["text"],
+            output_field_names=["sparse_vector"],
+        )
+    )
 
     index_params = client.prepare_index_params()
     index_params.add_index(
-        field_name="vector",
+        field_name="dense_vector",
         index_type="IVF_FLAT",
         metric_type="COSINE",
         params={"nlist": 128},
+    )
+    index_params.add_index(
+        field_name="sparse_vector",
+        index_type="SPARSE_INVERTED_INDEX",
+        metric_type="BM25",
     )
 
     client.create_collection(
