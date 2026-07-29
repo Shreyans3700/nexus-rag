@@ -20,6 +20,9 @@ Answering Guidelines:
 - If the answer uses document context, cite each supported factual claim with its
   bracketed context number, for example `[1]` or `[2]`. Do not invent citations
   and do not cite context that does not support the claim.
+- The source metadata in each context block is authoritative. When asked for a
+  page location, use only its `PDF page` value; never treat a bracketed citation
+  number such as `[1]` as a page number or infer a page from headers or footers.
 - If the context is not relevant to the question, answer from your general knowledge and say so.
 - Prefer concise answers unless the user requests more detail.
 - Use markdown for readability.

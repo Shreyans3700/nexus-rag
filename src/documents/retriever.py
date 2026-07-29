@@ -10,7 +10,11 @@ from src.config.config import (
     MILVUS_HYBRID_CANDIDATE_K,
     MILVUS_RRF_K,
     MILVUS_TOP_K,
+    RERANKER_CANDIDATE_K,
+    RERANKER_ENABLED,
+    RERANKER_TOP_K,
 )
+from src.documents.reranker import rerank_chunks
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,10 +39,16 @@ def cited_sources(answer: str, sources: list[dict]) -> list[dict]:
 def _format_context(chunks: list[dict]) -> str:
     if not chunks:
         return ""
-    lines = [
-        f"[{index + 1}] {chunk['text'].strip()}"
-        for index, chunk in enumerate(chunks)
-    ]
+    lines = []
+    for index, chunk in enumerate(chunks, start=1):
+        page = (
+            f"PDF page: {chunk['page']}"
+            if chunk["page"] is not None
+            else "PDF page: unavailable"
+        )
+        lines.append(
+            f"[{index}] Source: {chunk['filename']}\n{page}\n\n{chunk['text'].strip()}"
+        )
     return (
         "Relevant document context (use this to answer the user's question):\n\n"
         + "\n\n".join(lines)
@@ -137,27 +147,46 @@ async def retrieve_context(
                 return RetrievalResult(context="", sources=[])
 
         logger.debug(
-            "Running hybrid retrieval: user_id=%s session_id=%s scope=%s candidates=%s top_k=%s",
+            "Running hybrid retrieval: user_id=%s session_id=%s scope=%s candidates=%s rerank_enabled=%s",
             user_id,
             session_id,
             scope,
-            max(top_k, MILVUS_HYBRID_CANDIDATE_K),
-            top_k,
+            RERANKER_CANDIDATE_K
+            if RERANKER_ENABLED
+            else max(top_k, MILVUS_HYBRID_CANDIDATE_K),
+            RERANKER_ENABLED,
         )
         query_vector = await _embeddings.aembed_query(query)
+        retrieval_k = RERANKER_CANDIDATE_K if RERANKER_ENABLED else top_k
         chunks = _hybrid_search(
             milvus_client=milvus_client,
             query=query,
             query_vector=query_vector,
             filter_expr=filter_expr,
-            top_k=top_k,
+            top_k=retrieval_k,
         )
+        if RERANKER_ENABLED:
+            try:
+                chunks = await rerank_chunks(
+                    query=query,
+                    chunks=chunks,
+                    top_k=min(RERANKER_TOP_K, top_k),
+                )
+            except Exception:
+                logger.warning(
+                    "Reranking failed; using hybrid-ranked candidates: user_id=%s session_id=%s",
+                    user_id,
+                    session_id,
+                    exc_info=True,
+                )
+                chunks = chunks[:top_k]
         logger.info(
-            "Hybrid retrieval: user_id=%s session_id=%s scope=%s chunks_returned=%s",
+            "Hybrid retrieval: user_id=%s session_id=%s scope=%s chunks_returned=%s reranked=%s",
             user_id,
             session_id,
             scope,
             len(chunks),
+            RERANKER_ENABLED,
         )
         sources = [
             {

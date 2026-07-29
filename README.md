@@ -62,6 +62,13 @@ MILVUS_COLLECTION_NAME=doc_chunks
 MILVUS_TOP_K=5
 MILVUS_HYBRID_CANDIDATE_K=20
 MILVUS_RRF_K=60
+
+# Cross-encoder reranking (local model, loaded on first retrieval)
+RERANKER_ENABLED=true
+RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2
+RERANKER_CANDIDATE_K=30
+RERANKER_TOP_K=5
+RERANKER_MAX_LENGTH=512
 ```
 
 ## Local Development
@@ -226,5 +233,9 @@ docker run --env-file .env -p 8000:8000 chatbot
 
 - The context sent to the model is trimmed to the most recent configured number of messages. Update `MAX_CHAT_HISTORY_MESSAGES` in `.env` to change the window.
 - `MILVUS_TOP_K` controls how many document chunks are retrieved per query (default 5).
+- When `RERANKER_ENABLED=true`, the app retrieves up to `RERANKER_CANDIDATE_K`
+  hybrid-search candidates, uses a local cross-encoder to select the best
+  `RERANKER_TOP_K`, and sends only those chunks to the LLM. The model is
+  downloaded when it is first used, so the first RAG request may take longer.
 - The streaming endpoint falls back to the final end-of-stream answer when a model emits empty chunks.
 - Document ingestion is asynchronous — the upload endpoint returns `202 Accepted` immediately. Poll `GET /documents?session_id=...` to watch status change from `processing` to `ready`.

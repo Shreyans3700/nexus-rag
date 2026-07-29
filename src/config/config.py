@@ -28,6 +28,18 @@ MILVUS_RRF_K = int(os.getenv("MILVUS_RRF_K", "60"))
 # token format: "username:password" — default Milvus root credentials are root:Milvus
 MILVUS_TOKEN = os.getenv("MILVUS_TOKEN", "root:Milvus")
 
+# Cross-encoder reranking settings. The model is loaded lazily on the first
+# retrieval so application startup remains fast.
+RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in {
+    "1", "true", "yes", "on"
+}
+RERANKER_MODEL = os.getenv(
+    "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L6-v2"
+)
+RERANKER_CANDIDATE_K = int(os.getenv("RERANKER_CANDIDATE_K", "30"))
+RERANKER_TOP_K = int(os.getenv("RERANKER_TOP_K", str(MILVUS_TOP_K)))
+RERANKER_MAX_LENGTH = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
+
 # Embedding vector dimension for text-embedding-3-small
 EMBEDDING_DIM = 1536
 
