@@ -1,3 +1,4 @@
+import json
 from typing import Any, List
 
 import tiktoken
@@ -13,6 +14,18 @@ MESSAGE_MAP = {
     "Human": HumanMessage,
     "AI": AIMessage,
 }
+
+
+def _deserialize_sources(value: Any) -> list[dict]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
 
 
 def _get_encoding():
@@ -84,7 +97,7 @@ async def get_session_context_from_db(session_id: str, user_id: str, db) -> dict
 
         rows = await connection.fetch(
             """
-                SELECT id, role, content
+                SELECT id, role, content, sources
                 FROM messages
                 WHERE session_id = $1
                 ORDER BY created_at ASC, id ASC
@@ -131,7 +144,7 @@ async def get_session_history_from_db(
     async with db.acquire() as connection:
         rows = await connection.fetch(
             """
-                SELECT id, role, content
+                SELECT id, role, content, sources
                 FROM messages
                 WHERE session_id = $1
                 ORDER BY created_at ASC, id ASC
@@ -140,7 +153,12 @@ async def get_session_history_from_db(
         )
 
     history = [
-        Session(sequence_no=row["id"], role=row["role"], content=row["content"])
+        Session(
+            sequence_no=row["id"],
+            role=row["role"],
+            content=row["content"],
+            sources=_deserialize_sources(row["sources"]),
+        )
         for row in rows
     ]
     logger.debug("Fetched session history rows: session_id=%s user_id=%s count=%s", session_id, user_id, len(history))

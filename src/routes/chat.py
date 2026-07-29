@@ -82,6 +82,7 @@ async def chat_with_bot(
         model_used=response["model_used"],
         tokens_used=response["tokens"],
         latency_time=response["latency_time"],
+        sources=response["sources"],
         status_code=status.HTTP_200_OK,
     )
 

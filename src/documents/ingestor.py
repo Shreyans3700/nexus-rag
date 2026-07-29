@@ -9,7 +9,7 @@ Status lifecycle:
   processing  →  ready      (success)
   processing  →  failed     (any unhandled exception)
 """
-from src.documents.chunker import chunk_text
+from src.documents.chunker import chunk_units
 from src.documents.embedder import embed_and_store
 from src.documents.parser import parse_file
 from src.logger import get_logger
@@ -45,9 +45,9 @@ async def ingest_document(
         session_id,
     )
     try:
-        # 1. Parse raw bytes → plain text
-        text = parse_file(filename, content)
-        if not text.strip():
+        # 1. Parse raw bytes → page-aware source units
+        units = parse_file(filename, content)
+        if not units:
             logger.warning(
                 "Parsed empty text from document: document_id=%s filename=%s",
                 document_id,
@@ -56,8 +56,8 @@ async def ingest_document(
             await _mark_status(db, document_id, "failed", chunk_count=0)
             return
 
-        # 2. Chunk the text
-        chunks = chunk_text(text)
+        # 2. Chunk units independently so PDF chunks never cross pages.
+        chunks = chunk_units(units)
         if not chunks:
             logger.warning(
                 "Chunker produced zero chunks: document_id=%s filename=%s",

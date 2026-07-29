@@ -1,4 +1,7 @@
 """Hybrid document retrieval using Milvus dense vectors, BM25, and RRF."""
+from dataclasses import dataclass
+import re
+
 from langchain_openai import OpenAIEmbeddings
 from pymilvus import AnnSearchRequest, MilvusClient, RRFRanker
 
@@ -15,10 +18,27 @@ logger = get_logger(__name__)
 _embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
 
-def _format_context(chunks: list[str]) -> str:
+@dataclass(frozen=True)
+class RetrievalResult:
+    """LLM context plus the exact source metadata used to build it."""
+
+    context: str
+    sources: list[dict]
+
+
+def cited_sources(answer: str, sources: list[dict]) -> list[dict]:
+    """Return only sources explicitly cited as ``[n]`` in the answer."""
+    cited_numbers = {int(number) for number in re.findall(r"\[(\d+)]", answer)}
+    return [source for source in sources if source["citation"] in cited_numbers]
+
+
+def _format_context(chunks: list[dict]) -> str:
     if not chunks:
         return ""
-    lines = [f"[{index + 1}] {chunk.strip()}" for index, chunk in enumerate(chunks)]
+    lines = [
+        f"[{index + 1}] {chunk['text'].strip()}"
+        for index, chunk in enumerate(chunks)
+    ]
     return (
         "Relevant document context (use this to answer the user's question):\n\n"
         + "\n\n".join(lines)
@@ -53,7 +73,7 @@ def _hybrid_search(
     query_vector: list[float],
     filter_expr: str,
     top_k: int,
-) -> list[str]:
+) -> list[dict]:
     candidate_k = max(top_k, MILVUS_HYBRID_CANDIDATE_K)
     dense_request = AnnSearchRequest(
         data=[query_vector],
@@ -74,10 +94,19 @@ def _hybrid_search(
         reqs=[dense_request, sparse_request],
         ranker=RRFRanker(k=MILVUS_RRF_K),
         limit=top_k,
-        output_fields=["text", "filename", "document_id", "chunk_index"],
+        output_fields=["text", "filename", "document_id", "chunk_index", "page"],
     )
     hits = results[0] if results else []
-    return [hit["entity"]["text"] for hit in hits if hit.get("entity", {}).get("text")]
+    return [
+        {
+            "text": entity["text"],
+            "filename": entity.get("filename", "Unknown document"),
+            "page": entity.get("page"),
+            "chunk": entity.get("chunk_index", 0),
+        }
+        for hit in hits
+        if (entity := hit.get("entity", {})).get("text")
+    ]
 
 
 async def retrieve_context(
@@ -86,10 +115,10 @@ async def retrieve_context(
     user_id: str,
     milvus_client: MilvusClient,
     top_k: int = MILVUS_TOP_K,
-) -> str:
+) -> RetrievalResult:
     """Retrieve hybrid-ranked context, preferring the active session's documents."""
     if not query.strip():
-        return ""
+        return RetrievalResult(context="", sources=[])
 
     session_filter = _scope_filter(user_id, session_id)
     try:
@@ -105,7 +134,7 @@ async def retrieve_context(
             scope = "user"
             if not _has_chunks(milvus_client, filter_expr):
                 logger.debug("No indexed chunks: user_id=%s session_id=%s", user_id, session_id)
-                return ""
+                return RetrievalResult(context="", sources=[])
 
         logger.debug(
             "Running hybrid retrieval: user_id=%s session_id=%s scope=%s candidates=%s top_k=%s",
@@ -130,7 +159,16 @@ async def retrieve_context(
             scope,
             len(chunks),
         )
-        return _format_context(chunks)
+        sources = [
+            {
+                "filename": chunk["filename"],
+                "page": chunk["page"],
+                "chunk": chunk["chunk"],
+                "citation": index,
+            }
+            for index, chunk in enumerate(chunks, start=1)
+        ]
+        return RetrievalResult(context=_format_context(chunks), sources=sources)
     except Exception:
         logger.warning(
             "Hybrid retrieval failed: user_id=%s session_id=%s",
@@ -138,4 +176,4 @@ async def retrieve_context(
             session_id,
             exc_info=True,
         )
-        return ""
+        return RetrievalResult(context="", sources=[])

@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 from src.database.exceptions import SessionAccessError
 from src.database.fetch_data import get_session_context_from_db
 from src.database.update_data import update_session_history
-from src.documents.retriever import retrieve_context
+from src.documents.retriever import cited_sources, retrieve_context
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -90,13 +90,16 @@ async def stream_answer(
     # Retrieve RAG context (graceful fallback to "" on any error)
     # ------------------------------------------------------------------
     context_str = ""
+    sources: list[dict] = []
     try:
-        context_str = await retrieve_context(
+        retrieval = await retrieve_context(
             query=user_query,
             session_id=session_id,
             user_id=user_id,
             milvus_client=milvus_client,
         )
+        context_str = retrieval.context
+        sources = retrieval.sources
         logger.debug(
             "Retrieved context: session_id=%s context_chars=%s",
             session_id,
@@ -202,6 +205,7 @@ async def stream_answer(
             )
 
     final_answer = final_answer.strip()
+    sources = cited_sources(final_answer, sources)
 
     if not final_answer:
         logger.warning(
@@ -240,6 +244,7 @@ async def stream_answer(
             ai_message=final_ai_message,
             db=db,
             title=title,
+            sources=sources,
         )
         logger.info(
             "Persisted streamed answer: session=%s user_id=%s model=%s tokens=%s latency=%s",
@@ -258,5 +263,5 @@ async def stream_answer(
 
     yield (
         "event: done\n"
-        f"data: {json.dumps({'model': model_name, 'tokens': total_tokens, 'latency': latency, 'answer': final_answer})}\n\n"
+        f"data: {json.dumps({'model': model_name, 'tokens': total_tokens, 'latency': latency, 'answer': final_answer, 'sources': sources})}\n\n"
     )

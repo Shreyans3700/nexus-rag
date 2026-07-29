@@ -50,12 +50,14 @@ async def update_session_history(
     ai_message: AIMessage,
     db,
     title: str | None,
+    sources: list[dict] | None = None,
 ) -> bool:
     logger.debug("Persisting session history: session_id=%s user_id=%s title_present=%s", session_id, user_id, bool(title))
     user_content = _serialize_message_content(user_message)
     ai_content = _serialize_message_content(
         ai_message.content if hasattr(ai_message, "content") else ai_message
     )
+    serialized_sources = json.dumps(sources or [], ensure_ascii=False)
     try:
         async with db.acquire() as connection:
             async with connection.transaction():
@@ -90,19 +92,20 @@ async def update_session_history(
 
                 await connection.execute(
                     """
-                    INSERT INTO messages (session_id, role, content)
-                    VALUES ($1, 'Human', $2)
+                    INSERT INTO messages (session_id, role, content, sources)
+                    VALUES ($1, 'Human', $2, '[]'::jsonb)
                     """,
                     session_id,
                     user_content,
                 )
                 await connection.execute(
                     """
-                    INSERT INTO messages (session_id, role, content)
-                    VALUES ($1, 'AI', $2)
+                    INSERT INTO messages (session_id, role, content, sources)
+                    VALUES ($1, 'AI', $2, $3::jsonb)
                     """,
                     session_id,
                     ai_content,
+                    serialized_sources,
                 )
                 await connection.execute(
                     """

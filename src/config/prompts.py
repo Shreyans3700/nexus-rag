@@ -17,7 +17,9 @@ Conversation Guidelines:
 
 Answering Guidelines:
 - When document context is provided below, prefer it as your primary source of truth.
-- If the answer is clearly present in the provided context, cite it directly.
+- If the answer uses document context, cite each supported factual claim with its
+  bracketed context number, for example `[1]` or `[2]`. Do not invent citations
+  and do not cite context that does not support the claim.
 - If the context is not relevant to the question, answer from your general knowledge and say so.
 - Prefer concise answers unless the user requests more detail.
 - Use markdown for readability.

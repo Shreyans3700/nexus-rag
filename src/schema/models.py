@@ -1,5 +1,12 @@
-from pydantic import BaseModel, Field
 from typing import List
+from pydantic import BaseModel, Field
+
+
+class SourceModel(BaseModel):
+    citation: int
+    filename: str
+    page: int | None = None
+    chunk: int
 
 
 class RequestModel(BaseModel):
@@ -14,6 +21,7 @@ class ResponseModel(BaseModel):
     model_used: str
     tokens_used: int
     latency_time: float
+    sources: List[SourceModel] = Field(default_factory=list)
     status_code: int = Field(200, ge=100, le=599)
 
 
@@ -30,6 +38,7 @@ class Session(BaseModel):
     sequence_no: int
     role: str
     content: str
+    sources: List[SourceModel] = Field(default_factory=list)
 
 
 class SessionHistoryResponse(BaseModel):

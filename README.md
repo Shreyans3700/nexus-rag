@@ -72,7 +72,35 @@ MILVUS_RRF_K=60
 docker compose up -d
 ```
 
-This starts etcd, MinIO, and Milvus Standalone on port `19530`.
+This starts etcd, MinIO, Milvus Standalone on port `19530`, and Attu at
+`http://localhost:8001` for direct collection and chunk inspection. In Attu,
+connect to `milvus:19530` with the configured Milvus credentials.
+
+### Inspecting chunks with Attu
+
+Attu is a local Milvus administration UI. It is independent of the FastAPI and
+Streamlit applications, so chunk inspection does not expose an additional
+chatbot API endpoint.
+
+1. Start or update the service:
+
+   ```bash
+   docker compose up -d attu
+   ```
+
+2. Open [http://localhost:8001](http://localhost:8001).
+3. Connect using the Docker-network address `milvus:19530` — do **not** use
+   `localhost:19530`, which would refer to the Attu container itself.
+4. Authenticate with the value configured in `MILVUS_TOKEN`. The development
+   Compose configuration uses the standard `root` username and `Milvus`
+   password unless you override it.
+5. Open the `doc_chunks` collection (or the collection named by
+   `MILVUS_COLLECTION_NAME`) and browse/query its entities. Each indexed chunk
+   contains `text`, `filename`, `page`, `chunk_index`, `document_id`,
+   `session_id`, and `user_id`, along with dense and sparse vectors.
+
+Attu is intended for local development and administration. Do not expose port
+`8001` publicly without putting it behind appropriate network access controls.
 
 2. Create and activate a virtual environment:
 
@@ -119,6 +147,8 @@ The API will be available at `http://localhost:8000` and the frontend at `http:/
 ### Milvus migration
 
 The hybrid schema is incompatible with the old dense-only collection. Before deploying this version, drop the existing `doc_chunks` collection in Milvus, restart the API, and upload documents again. If existing Postgres document rows are retained, clear them first as well so the UI does not show stale documents as ready. This version does not rebuild Milvus automatically.
+
+The citation schema adds a nullable `page` field to both `document_chunks` and Milvus. Because the configured Milvus 2.5 server has an immutable collection schema, an existing `doc_chunks` collection must also be recreated and its documents re-uploaded. The API fails fast with a migration message instead of silently indexing uncitable PDF chunks.
 
 ## API Endpoints
 

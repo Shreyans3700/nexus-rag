@@ -93,6 +93,20 @@ services:
     networks:
       - milvus-net
 
+  # Direct Milvus administration UI. This is intentionally separate from the
+  # chatbot API and is only exposed on the local development machine.
+  attu:
+    container_name: milvus-attu
+    image: zilliz/attu:v2.5.10
+    restart: unless-stopped
+    ports:
+      - "8001:3000"
+    depends_on:
+      milvus:
+        condition: service_healthy
+    networks:
+      - milvus-net
+
   chatbot:
     container_name: chatbot-api
     build: .
