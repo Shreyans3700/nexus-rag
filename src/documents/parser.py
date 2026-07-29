@@ -1,5 +1,5 @@
 """
-Document parser — converts raw file bytes into plain text.
+Document parser — converts raw file bytes into page-aware text units.
 
 Supported formats: PDF, DOCX, TXT, MD, CSV.
 Raises ValueError for unsupported file extensions.
@@ -7,6 +7,7 @@ Raises ValueError for unsupported file extensions.
 import csv
 import io
 import os
+from dataclasses import dataclass
 
 from src.logger import get_logger
 
@@ -15,15 +16,28 @@ logger = get_logger(__name__)
 _SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv"}
 
 
-def parse_file(filename: str, content: bytes) -> str:
-    """Parse raw file bytes into a plain-text string.
+@dataclass(frozen=True)
+class ParsedUnit:
+    """A source unit passed to the chunker.
+
+    ``page`` is one-based for PDFs and ``None`` for formats that do not have a
+    stable page concept. Keeping this metadata before chunking makes every PDF
+    chunk traceable to its original page.
+    """
+
+    text: str
+    page: int | None = None
+
+
+def parse_file(filename: str, content: bytes) -> list[ParsedUnit]:
+    """Parse raw file bytes into page-aware text units.
 
     Args:
         filename: Original filename including extension (used for dispatch).
         content:  Raw bytes of the uploaded file.
 
     Returns:
-        Extracted text string.  May be empty if the file has no text layer.
+        Extracted units. May be empty if the file has no text layer.
 
     Raises:
         ValueError: If the file extension is not supported.
@@ -38,27 +52,33 @@ def parse_file(filename: str, content: bytes) -> str:
     logger.debug("Parsing file: filename=%s ext=%s size=%s", filename, ext, len(content))
 
     if ext == ".pdf":
-        text = _parse_pdf(content)
+        units = _parse_pdf(content)
     elif ext == ".docx":
-        text = _parse_docx(content)
+        units = [ParsedUnit(text=_parse_docx(content))]
     elif ext in {".txt", ".md"}:
-        text = _parse_text(content)
+        units = [ParsedUnit(text=_parse_text(content))]
     elif ext == ".csv":
-        text = _parse_csv(content)
+        units = [ParsedUnit(text=_parse_csv(content))]
     else:
         # Should never reach here given the guard above
         raise ValueError(f"Unsupported extension: {ext}")
 
-    logger.debug("Parsed file: filename=%s chars=%s", filename, len(text))
-    return text
+    units = [unit for unit in units if unit.text.strip()]
+    logger.debug(
+        "Parsed file: filename=%s units=%s chars=%s",
+        filename,
+        len(units),
+        sum(len(unit.text) for unit in units),
+    )
+    return units
 
 
 # ---------------------------------------------------------------------------
 # Per-format helpers
 # ---------------------------------------------------------------------------
 
-def _parse_pdf(content: bytes) -> str:
-    """Extract text from all pages of a PDF."""
+def _parse_pdf(content: bytes) -> list[ParsedUnit]:
+    """Extract text page by page, retaining one-based PDF page numbers."""
     try:
         import pypdf  # lazy import so the package is only required when used
     except ImportError as exc:
@@ -68,12 +88,12 @@ def _parse_pdf(content: bytes) -> str:
         ) from exc
 
     reader = pypdf.PdfReader(io.BytesIO(content))
-    pages: list[str] = []
-    for page in reader.pages:
+    pages: list[ParsedUnit] = []
+    for page_number, page in enumerate(reader.pages, start=1):
         page_text = page.extract_text() or ""
         if page_text.strip():
-            pages.append(page_text)
-    return "\n\n".join(pages)
+            pages.append(ParsedUnit(text=page_text, page=page_number))
+    return pages
 
 
 def _parse_docx(content: bytes) -> str:

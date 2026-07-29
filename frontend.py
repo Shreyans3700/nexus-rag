@@ -470,6 +470,7 @@ def load_session_history(session_id: str) -> list[dict]:
             {
                 "role": "user" if item["role"] == "Human" else "assistant",
                 "content": item["content"],
+                "sources": item.get("sources", []),
             }
             for item in history
         ]
@@ -545,6 +546,22 @@ def stream_chat_response(session_id: str, user_query: str):
         logger.exception("Frontend stream request failed: session_id=%s", session_id)
         st.session_state["_last_meta"] = None
         yield f"\n\n*(couldn't reach the backend: {e})*"
+
+
+def render_sources(sources: list[dict]) -> None:
+    """Render only sources explicitly cited by the assistant response."""
+    if not sources:
+        return
+    citation_text = " · ".join(
+        f"[{source.get('citation')}] {source.get('filename', 'Unknown document')}"
+        + (
+            f" (Page {source['page']})"
+            if source.get("page") is not None
+            else ""
+        )
+        for source in sources
+    )
+    st.caption(f"Sources: {citation_text}")
 
 
 # -----------------------------------------------------------------------
@@ -671,6 +688,7 @@ if not st.session_state.messages:
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        render_sources(msg.get("sources") or [])
 
 chat_submission = st.chat_input(
     "Ask a question, or attach documents...",
@@ -722,9 +740,12 @@ if chat_submission:
             answer = st.write_stream(
                 stream_chat_response(st.session_state.current_session_id, query_text)
             )
-        st.session_state.messages.append({"role": "assistant", "content": answer})
 
         meta = st.session_state.pop("_last_meta", None)
+        sources = (meta or {}).get("sources") or []
+        st.session_state.messages.append(
+            {"role": "assistant", "content": answer, "sources": sources}
+        )
         if meta:
             latency = meta.get("latency")
             latency_str = f"{latency:.2f}s" if isinstance(latency, (int, float)) else "n/a"
@@ -733,6 +754,7 @@ if chat_submission:
                 f'· {meta.get("tokens", "n/a")} tokens · {latency_str}</div>',
                 unsafe_allow_html=True,
             )
+            render_sources(sources)
     elif not upload_error:
         with st.chat_message("assistant"):
             st.markdown("Got it — ask me a question about that whenever you're ready.")

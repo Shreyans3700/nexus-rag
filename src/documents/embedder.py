@@ -17,6 +17,7 @@ from langchain_openai import OpenAIEmbeddings
 from pymilvus import MilvusClient
 
 from src.config.config import MILVUS_COLLECTION_NAME
+from src.documents.chunker import DocumentChunk
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,7 +35,7 @@ def _truncate(text: str, max_len: int = _TEXT_MAX_LEN) -> str:
 
 
 async def embed_and_store(
-    chunks: list[str],
+    chunks: list[DocumentChunk],
     document_id: str,
     user_id: str,
     session_id: str,
@@ -45,7 +46,7 @@ async def embed_and_store(
     """Embed *chunks* and write them to both Milvus and Postgres.
 
     Args:
-        chunks:       List of text chunks produced by the chunker.
+        chunks:       Page-aware chunks produced by the chunker.
         document_id:  UUID of the parent document row in Postgres.
         user_id:      ID of the owning user (for scoping / filtering).
         session_id:   ID of the chat session (for scoping / filtering).
@@ -77,7 +78,7 @@ async def embed_and_store(
     # 1. Embed all chunks in one batched call
     # ------------------------------------------------------------------
     try:
-        vectors = await _embeddings.aembed_documents(chunks)
+        vectors = await _embeddings.aembed_documents([chunk.text for chunk in chunks])
     except Exception as exc:
         logger.exception(
             "OpenAI embedding failed: document_id=%s chunks=%s", document_id, len(chunks)
@@ -90,8 +91,16 @@ async def embed_and_store(
     chunk_ids = [str(uuid.uuid4()) for _ in chunks]
 
     pg_rows = [
-        (chunk_ids[i], document_id, user_id, session_id, i, chunks[i])
-        for i in range(len(chunks))
+        (
+            chunk_ids[i],
+            document_id,
+            user_id,
+            session_id,
+            chunk.chunk_index,
+            chunk.text,
+            chunk.page,
+        )
+        for i, chunk in enumerate(chunks)
     ]
 
     try:
@@ -99,8 +108,8 @@ async def embed_and_store(
             await conn.executemany(
                 """
                 INSERT INTO document_chunks
-                    (id, document_id, user_id, session_id, chunk_index, chunk_text)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                    (id, document_id, user_id, session_id, chunk_index, chunk_text, page)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (id) DO NOTHING
                 """,
                 pg_rows,
@@ -125,12 +134,13 @@ async def embed_and_store(
             "document_id": document_id,
             "user_id": user_id,
             "session_id": session_id,
-            "chunk_index": i,
+            "chunk_index": chunk.chunk_index,
+            "page": chunk.page,
             "filename": _truncate(filename, 512),
-            "text": _truncate(chunks[i]),
+            "text": _truncate(chunk.text),
             "dense_vector": vectors[i],
         }
-        for i in range(len(chunks))
+        for i, chunk in enumerate(chunks)
     ]
 
     try:

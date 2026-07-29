@@ -62,6 +62,13 @@ MILVUS_COLLECTION_NAME=doc_chunks
 MILVUS_TOP_K=5
 MILVUS_HYBRID_CANDIDATE_K=20
 MILVUS_RRF_K=60
+
+# Cross-encoder reranking (local model, loaded on first retrieval)
+RERANKER_ENABLED=true
+RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2
+RERANKER_CANDIDATE_K=30
+RERANKER_TOP_K=5
+RERANKER_MAX_LENGTH=512
 ```
 
 ## Local Development
@@ -72,7 +79,35 @@ MILVUS_RRF_K=60
 docker compose up -d
 ```
 
-This starts etcd, MinIO, and Milvus Standalone on port `19530`.
+This starts etcd, MinIO, Milvus Standalone on port `19530`, and Attu at
+`http://localhost:8001` for direct collection and chunk inspection. In Attu,
+connect to `milvus:19530` with the configured Milvus credentials.
+
+### Inspecting chunks with Attu
+
+Attu is a local Milvus administration UI. It is independent of the FastAPI and
+Streamlit applications, so chunk inspection does not expose an additional
+chatbot API endpoint.
+
+1. Start or update the service:
+
+   ```bash
+   docker compose up -d attu
+   ```
+
+2. Open [http://localhost:8001](http://localhost:8001).
+3. Connect using the Docker-network address `milvus:19530` — do **not** use
+   `localhost:19530`, which would refer to the Attu container itself.
+4. Authenticate with the value configured in `MILVUS_TOKEN`. The development
+   Compose configuration uses the standard `root` username and `Milvus`
+   password unless you override it.
+5. Open the `doc_chunks` collection (or the collection named by
+   `MILVUS_COLLECTION_NAME`) and browse/query its entities. Each indexed chunk
+   contains `text`, `filename`, `page`, `chunk_index`, `document_id`,
+   `session_id`, and `user_id`, along with dense and sparse vectors.
+
+Attu is intended for local development and administration. Do not expose port
+`8001` publicly without putting it behind appropriate network access controls.
 
 2. Create and activate a virtual environment:
 
@@ -119,6 +154,8 @@ The API will be available at `http://localhost:8000` and the frontend at `http:/
 ### Milvus migration
 
 The hybrid schema is incompatible with the old dense-only collection. Before deploying this version, drop the existing `doc_chunks` collection in Milvus, restart the API, and upload documents again. If existing Postgres document rows are retained, clear them first as well so the UI does not show stale documents as ready. This version does not rebuild Milvus automatically.
+
+The citation schema adds a nullable `page` field to both `document_chunks` and Milvus. Because the configured Milvus 2.5 server has an immutable collection schema, an existing `doc_chunks` collection must also be recreated and its documents re-uploaded. The API fails fast with a migration message instead of silently indexing uncitable PDF chunks.
 
 ## API Endpoints
 
@@ -196,5 +233,9 @@ docker run --env-file .env -p 8000:8000 chatbot
 
 - The context sent to the model is trimmed to the most recent configured number of messages. Update `MAX_CHAT_HISTORY_MESSAGES` in `.env` to change the window.
 - `MILVUS_TOP_K` controls how many document chunks are retrieved per query (default 5).
+- When `RERANKER_ENABLED=true`, the app retrieves up to `RERANKER_CANDIDATE_K`
+  hybrid-search candidates, uses a local cross-encoder to select the best
+  `RERANKER_TOP_K`, and sends only those chunks to the LLM. The model is
+  downloaded when it is first used, so the first RAG request may take longer.
 - The streaming endpoint falls back to the final end-of-stream answer when a model emits empty chunks.
 - Document ingestion is asynchronous — the upload endpoint returns `202 Accepted` immediately. Poll `GET /documents?session_id=...` to watch status change from `processing` to `ready`.

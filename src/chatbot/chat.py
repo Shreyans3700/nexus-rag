@@ -3,7 +3,7 @@ import time
 from src.database.exceptions import SessionAccessError
 from src.database.fetch_data import get_session_context_from_db
 from src.database.update_data import update_session_history
-from src.documents.retriever import retrieve_context
+from src.documents.retriever import cited_sources, retrieve_context
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -57,13 +57,16 @@ async def get_answer(
     # Retrieve RAG context (graceful fallback to "" on any error)
     # ------------------------------------------------------------------
     context_str = ""
+    sources: list[dict] = []
     try:
-        context_str = await retrieve_context(
+        retrieval = await retrieve_context(
             query=user_query,
             session_id=session_id,
             user_id=user_id,
             milvus_client=milvus_client,
         )
+        context_str = retrieval.context
+        sources = retrieval.sources
     except Exception:
         logger.warning(
             "Retrieval failed — proceeding without RAG context: session_id=%s",
@@ -91,6 +94,7 @@ async def get_answer(
     metadata = response.response_metadata
     token_usage = metadata.get("token_usage") or {}
     final_response = str(response.content)
+    sources = cited_sources(final_response, sources)
     model_used = str(metadata.get("model_name", "unknown"))
     finish_reason = str(metadata.get("finish_reason", "unknown"))
     total_token_used = int(token_usage.get("total_tokens", 0))
@@ -103,6 +107,7 @@ async def get_answer(
         ai_message=response,
         db=db,
         title=title,
+        sources=sources,
     )
     if not save_status:
         logger.error(
@@ -126,4 +131,5 @@ async def get_answer(
         "model_used": model_used,
         "tokens": total_token_used,
         "latency_time": time_taken,
+        "sources": sources,
     }

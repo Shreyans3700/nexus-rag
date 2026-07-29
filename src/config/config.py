@@ -28,6 +28,18 @@ MILVUS_RRF_K = int(os.getenv("MILVUS_RRF_K", "60"))
 # token format: "username:password" — default Milvus root credentials are root:Milvus
 MILVUS_TOKEN = os.getenv("MILVUS_TOKEN", "root:Milvus")
 
+# Cross-encoder reranking settings. The model is loaded lazily on the first
+# retrieval so application startup remains fast.
+RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "true").lower() in {
+    "1", "true", "yes", "on"
+}
+RERANKER_MODEL = os.getenv(
+    "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L6-v2"
+)
+RERANKER_CANDIDATE_K = int(os.getenv("RERANKER_CANDIDATE_K", "30"))
+RERANKER_TOP_K = int(os.getenv("RERANKER_TOP_K", str(MILVUS_TOP_K)))
+RERANKER_MAX_LENGTH = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
+
 # Embedding vector dimension for text-embedding-3-small
 EMBEDDING_DIM = 1536
 
@@ -53,6 +65,18 @@ llm = ChatOpenAI(
 def _bootstrap_milvus_collection(client: MilvusClient, collection_name: str) -> None:
     """Create the doc_chunks collection with all required fields if it does not exist."""
     if client.has_collection(collection_name):
+        description = client.describe_collection(collection_name)
+        field_names = {
+            field.get("name") or field.get("field_name")
+            for field in description.get("fields", [])
+        }
+        if "page" not in field_names:
+            raise RuntimeError(
+                f"Milvus collection '{collection_name}' uses the pre-citation schema. "
+                "Milvus 2.5 does not support adding fields to an existing collection. "
+                "Drop and recreate the collection, clear existing document records, "
+                "then re-upload documents so page metadata can be indexed."
+            )
         logger.info("Milvus collection already exists: %s", collection_name)
         return
 
@@ -63,6 +87,7 @@ def _bootstrap_milvus_collection(client: MilvusClient, collection_name: str) -> 
     schema.add_field("user_id", DataType.VARCHAR, max_length=128)
     schema.add_field("session_id", DataType.VARCHAR, max_length=128)
     schema.add_field("chunk_index", DataType.INT32)
+    schema.add_field("page", DataType.INT32, nullable=True)
     schema.add_field("filename", DataType.VARCHAR, max_length=512)
     schema.add_field("text", DataType.VARCHAR, max_length=4096, enable_analyzer=True)
     schema.add_field("dense_vector", DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM)
@@ -162,6 +187,7 @@ async def set_environment(app: FastAPI):
                     session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
                     role TEXT NOT NULL CHECK (role IN ('Human', 'AI')),
                     content TEXT NOT NULL,
+                    sources JSONB NOT NULL DEFAULT '[]'::jsonb,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
@@ -173,6 +199,9 @@ async def set_environment(app: FastAPI):
             )
             await connection.execute(
                 "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT"
+            )
+            await connection.execute(
+                "ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources JSONB NOT NULL DEFAULT '[]'::jsonb"
             )
 
             # --- RAG: document metadata table ---
@@ -202,6 +231,7 @@ async def set_environment(app: FastAPI):
                     session_id TEXT NOT NULL,
                     chunk_index INT NOT NULL,
                     chunk_text TEXT NOT NULL,
+                    page INT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS document_chunks_session_id_idx
@@ -209,6 +239,9 @@ async def set_environment(app: FastAPI):
                 CREATE INDEX IF NOT EXISTS document_chunks_document_id_idx
                     ON document_chunks (document_id);
                 """
+            )
+            await connection.execute(
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS page INT"
             )
 
         logger.info("PostgreSQL schema ready")
