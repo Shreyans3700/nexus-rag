@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Full stack: FastAPI chatbot + Milvus (etcd + MinIO + Milvus Standalone).
 # PostgreSQL runs on the host machine — reachable via host.docker.internal.
 #
@@ -112,7 +110,8 @@ services:
     build: .
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       # Override MILVUS_HOST — inside Docker, reach Milvus by its container name
       MILVUS_HOST: milvus-standalone
@@ -126,6 +125,16 @@ services:
     # host.docker.internal lets the container reach Postgres on the host machine
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # Opt-in unit test runner. It uses the application image but does not start
+  # or require external services because the unit suite mocks those boundaries.
+  tests:
+    build: .
+    profiles: ["test"]
+    environment:
+      OPENAI_API_KEY: test-key
+      JWT_SECRET: test-jwt-secret
+    command: ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
 
 networks:
   milvus-net:
