@@ -137,6 +137,21 @@ streamlit run frontend.py
 
 The API will be available at `http://localhost:8000` and the frontend at `http://localhost:8501`.
 
+## Tests
+
+The unit tests use only local mocks and do not require PostgreSQL, Milvus, or
+an OpenAI API call. Run them from the project root:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Or run the same suite in the application container image:
+
+```bash
+docker compose --profile test run --rm tests
+```
+
 ## Authentication
 
 - `POST /auth/signup` — creates a user and returns an access token.
