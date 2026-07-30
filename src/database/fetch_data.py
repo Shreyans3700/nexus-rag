@@ -28,6 +28,22 @@ def _deserialize_sources(value: Any) -> list[dict]:
     return []
 
 
+def _with_sources_note(content: str, raw_sources: Any) -> str:
+    """Append cited source metadata so page/source follow-up questions can be
+    answered from chat history, since a fresh retrieval on a vague follow-up
+    query (e.g. "which page was that?") is not guaranteed to surface the same
+    chunk the original answer actually cited."""
+    sources = _deserialize_sources(raw_sources)
+    if not sources:
+        return content
+    lines = [
+        f"[{source.get('citation')}] {source.get('filename', 'Unknown document')} "
+        f"(PDF page: {source.get('page') if source.get('page') is not None else 'unavailable'})"
+        for source in sources
+    ]
+    return content + "\n\n(Cited sources for this answer:\n" + "\n".join(lines) + ")"
+
+
 def _get_encoding():
     try:
         return tiktoken.encoding_for_model(chat_model)
@@ -106,7 +122,11 @@ async def get_session_context_from_db(session_id: str, user_id: str, db) -> dict
         )
 
     history = [
-        MESSAGE_MAP[row["role"]](content=row["content"])
+        MESSAGE_MAP[row["role"]](
+            content=_with_sources_note(row["content"], row["sources"])
+            if row["role"] == "AI"
+            else row["content"]
+        )
         for row in rows
         if row["role"] in MESSAGE_MAP
     ]

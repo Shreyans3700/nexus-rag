@@ -30,9 +30,22 @@ class RetrievalResult:
     sources: list[dict]
 
 
+_CITATION_PATTERN = re.compile(r"\\?\[\^?(\d+(?:\s*,\s*\d+)*)\\?]")
+
+
 def cited_sources(answer: str, sources: list[dict]) -> list[dict]:
-    """Return only sources explicitly cited as ``[n]`` in the answer."""
-    cited_numbers = {int(number) for number in re.findall(r"\[(\d+)]", answer)}
+    """Return only sources explicitly cited as ``[n]`` in the answer.
+
+    Tolerates the formatting variants models commonly produce alongside
+    markdown output: comma-separated citations (``[1, 2]``), adjacent
+    brackets (``[1][2]``), markdown-escaped brackets (``\\[1\\]``), and
+    footnote-style markers (``[^1]``).
+    """
+    cited_numbers = {
+        int(number)
+        for group in _CITATION_PATTERN.findall(answer)
+        for number in re.split(r"\s*,\s*", group)
+    }
     return [source for source in sources if source["citation"] in cited_numbers]
 
 
