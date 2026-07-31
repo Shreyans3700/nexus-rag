@@ -67,9 +67,14 @@ async def get_answer(
         )
         context_str = retrieval.context
         sources = retrieval.sources
+        logger.info(
+            "SOURCES-TRACE: after retrieve_context (non-stream): session_id=%s raw_sources_count=%s",
+            session_id,
+            len(sources),
+        )
     except Exception:
         logger.warning(
-            "Retrieval failed — proceeding without RAG context: session_id=%s",
+            "SOURCES-TRACE: retrieval failed — proceeding without RAG context: session_id=%s",
             session_id,
             exc_info=True,
         )
@@ -94,12 +99,27 @@ async def get_answer(
     metadata = response.response_metadata
     token_usage = metadata.get("token_usage") or {}
     final_response = str(response.content)
+    raw_sources_count = len(sources)
     sources = cited_sources(final_response, sources)
+    logger.info(
+        "SOURCES-TRACE: after cited_sources filter (non-stream): session_id=%s "
+        "raw_sources_count=%s cited_sources_count=%s answer_preview=%r",
+        session_id,
+        raw_sources_count,
+        len(sources),
+        final_response[:300],
+    )
     model_used = str(metadata.get("model_name", "unknown"))
     finish_reason = str(metadata.get("finish_reason", "unknown"))
     total_token_used = int(token_usage.get("total_tokens", 0))
     time_taken = float(token_usage.get("total_time", 0.0))
 
+    logger.info(
+        "SOURCES-TRACE: calling update_session_history (non-stream): session_id=%s "
+        "sources_being_persisted_count=%s",
+        session_id,
+        len(sources),
+    )
     save_status = await update_session_history(
         session_id=session_id,
         user_id=user_id,

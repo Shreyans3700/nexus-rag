@@ -30,10 +30,28 @@ class RetrievalResult:
     sources: list[dict]
 
 
+_CITATION_PATTERN = re.compile(r"\\?\[\^?(\d+(?:\s*,\s*\d+)*)\\?]")
+
+
 def cited_sources(answer: str, sources: list[dict]) -> list[dict]:
-    """Return only sources explicitly cited as ``[n]`` in the answer."""
-    cited_numbers = {int(number) for number in re.findall(r"\[(\d+)]", answer)}
-    return [source for source in sources if source["citation"] in cited_numbers]
+    """Return sources explicitly cited as ``[n]`` in the answer.
+
+    Tolerates the formatting variants models commonly produce alongside
+    markdown output: comma-separated citations (``[1, 2]``), adjacent
+    brackets (``[1][2]``), markdown-escaped brackets (``\\[1\\]``), and
+    footnote-style markers (``[^1]``). If the model retrieved context but
+    tagged nothing explicitly, falls back to all retrieved sources rather
+    than losing citation/page data entirely.
+    """
+    cited_numbers = {
+        int(number)
+        for group in _CITATION_PATTERN.findall(answer)
+        for number in re.split(r"\s*,\s*", group)
+    }
+    explicitly_cited = [source for source in sources if source["citation"] in cited_numbers]
+    if explicitly_cited:
+        return explicitly_cited
+    return sources
 
 
 def _format_context(chunks: list[dict]) -> str:
@@ -143,7 +161,12 @@ async def retrieve_context(
             filter_expr = _scope_filter(user_id)
             scope = "user"
             if not _has_chunks(milvus_client, filter_expr):
-                logger.debug("No indexed chunks: user_id=%s session_id=%s", user_id, session_id)
+                logger.info(
+                    "SOURCES-TRACE: no indexed chunks for this user at all — sources will be empty: "
+                    "user_id=%s session_id=%s",
+                    user_id,
+                    session_id,
+                )
                 return RetrievalResult(context="", sources=[])
 
         logger.debug(
@@ -197,10 +220,18 @@ async def retrieve_context(
             }
             for index, chunk in enumerate(chunks, start=1)
         ]
+        logger.info(
+            "SOURCES-TRACE: retrieval built sources: user_id=%s session_id=%s sources_count=%s sources=%s",
+            user_id,
+            session_id,
+            len(sources),
+            sources,
+        )
         return RetrievalResult(context=_format_context(chunks), sources=sources)
     except Exception:
         logger.warning(
-            "Hybrid retrieval failed: user_id=%s session_id=%s",
+            "SOURCES-TRACE: hybrid retrieval raised an exception — falling back to "
+            "empty context/sources: user_id=%s session_id=%s",
             user_id,
             session_id,
             exc_info=True,

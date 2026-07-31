@@ -200,5 +200,7 @@ async def get_current_user(
 
     resolved_user_id = str(row["id"])
     set_user_id(resolved_user_id)
-    logger.debug("Authenticated user loaded: user_id=%s email=%s", resolved_user_id, row["email"])
+    logger.debug(
+        "Authenticated user loaded: user_id=%s email=%s", resolved_user_id, row["email"]
+    )
     return CurrentUser(id=resolved_user_id, email=row["email"])

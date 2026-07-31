@@ -100,14 +100,16 @@ async def stream_answer(
         )
         context_str = retrieval.context
         sources = retrieval.sources
-        logger.debug(
-            "Retrieved context: session_id=%s context_chars=%s",
+        logger.info(
+            "SOURCES-TRACE: after retrieve_context (stream): session_id=%s context_chars=%s "
+            "raw_sources_count=%s",
             session_id,
             len(context_str),
+            len(sources),
         )
     except Exception:
         logger.warning(
-            "Retrieval failed — proceeding without RAG context: session_id=%s",
+            "SOURCES-TRACE: retrieval failed — proceeding without RAG context: session_id=%s",
             session_id,
             exc_info=True,
         )
@@ -205,7 +207,16 @@ async def stream_answer(
             )
 
     final_answer = final_answer.strip()
+    raw_sources_count = len(sources)
     sources = cited_sources(final_answer, sources)
+    logger.info(
+        "SOURCES-TRACE: after cited_sources filter (stream): session_id=%s "
+        "raw_sources_count=%s cited_sources_count=%s answer_preview=%r",
+        session_id,
+        raw_sources_count,
+        len(sources),
+        _preview(final_answer, limit=300),
+    )
 
     if not final_answer:
         logger.warning(
@@ -237,6 +248,12 @@ async def stream_answer(
     )
 
     try:
+        logger.info(
+            "SOURCES-TRACE: calling update_session_history (stream): session_id=%s "
+            "sources_being_persisted_count=%s",
+            session_id,
+            len(sources),
+        )
         await update_session_history(
             session_id=session_id,
             user_id=user_id,
