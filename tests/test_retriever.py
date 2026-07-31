@@ -42,6 +42,21 @@ class RetrieverTests(unittest.TestCase):
 
         self.assertEqual(result, sources)
 
+    def test_falls_back_to_all_sources_when_nothing_cited(self):
+        sources = [
+            {"citation": 1, "filename": "one.pdf", "page": 1, "chunk": 0},
+            {"citation": 2, "filename": "two.pdf", "page": 3, "chunk": 1},
+        ]
+
+        result = cited_sources("The authors are Jane Doe and John Smith.", sources)
+
+        self.assertEqual(result, sources)
+
+    def test_no_sources_stays_empty_when_none_retrieved(self):
+        result = cited_sources("No context was used for this answer.", [])
+
+        self.assertEqual(result, [])
+
     def test_scope_filter_escapes_user_controlled_values(self):
         result = _scope_filter('user"id', 'session\\id')
 

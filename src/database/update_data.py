@@ -58,6 +58,12 @@ async def update_session_history(
         ai_message.content if hasattr(ai_message, "content") else ai_message
     )
     serialized_sources = json.dumps(sources or [], ensure_ascii=False)
+    logger.info(
+        "SOURCES-TRACE: about to INSERT into messages: session_id=%s "
+        "serialized_sources=%s",
+        session_id,
+        serialized_sources,
+    )
     try:
         async with db.acquire() as connection:
             async with connection.transaction():
