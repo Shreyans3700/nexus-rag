@@ -340,6 +340,9 @@ def upload_documents(files) -> dict:
 
     Sends files as multipart/form-data together with the current session_id
     so the backend can scope the document chunks to this session.
+    
+    Returns:
+        dict with "uploaded" key containing list of {document_id, filename, status}
     """
     if not is_authenticated():
         raise RuntimeError("Sign in to upload documents.")
@@ -366,6 +369,30 @@ def upload_documents(files) -> dict:
     return response.json()
 
 
+def fetch_document_status_by_id(document_id: str) -> dict | None:
+    """Fetch the current processing status of a specific document by ID.
+    
+    Returns:
+        dict with {document_id, status, failure_reason} or None if not found/error
+    """
+    if not is_authenticated():
+        return None
+    try:
+        response = requests.get(
+            f"{backend_url}/documents/{document_id}/status",
+            headers=auth_headers(),
+            timeout=10,
+        )
+        if response.status_code == 401:
+            logout_user()
+            return None
+        if response.status_code >= 400:
+            return None
+        return response.json()
+    except requests.RequestException:
+        return None
+
+
 def fetch_document_status(session_id: str) -> list[dict]:
     """Fetch the current ingestion status of all documents for a session."""
     if not is_authenticated():
@@ -387,37 +414,58 @@ def fetch_document_status(session_id: str) -> list[dict]:
         return []
 
 
-def poll_ingestion_status(session_id: str, filenames: list[str]) -> None:
-    """Block (with a live status table) until all uploaded docs are no longer 'processing'.
-
-    Shows a compact status indicator inside the chat area.  Gives up after
-    30 seconds to avoid blocking the UI indefinitely on a failure.
+def poll_ingestion_status(document_ids: list[tuple[str, str]]) -> None:
+    """Poll individual document processing status until all are ready or failed.
+    
+    Shows a live status table with per-document progress indicators.
+    Gives up after 60 seconds to avoid blocking the UI indefinitely.
+    
+    Args:
+        document_ids: List of (document_id, filename) tuples from upload response
     """
     import time as _time
 
     status_placeholder = st.empty()
-    deadline = _time.monotonic() + 30
-    pending = set(filenames)
+    deadline = _time.monotonic() + 60
+    pending = {doc_id: fname for doc_id, fname in document_ids}
 
     while pending and _time.monotonic() < deadline:
-        docs = fetch_document_status(session_id)
-        # Build a quick lookup by filename
-        status_by_name: dict[str, str] = {}
-        for doc in docs:
-            name = doc.get("filename", "")
-            s = doc.get("status", "processing")
-            # Keep the worst status if the same filename was uploaded multiple times
-            if name not in status_by_name or s == "failed":
-                status_by_name[name] = s
-
         lines = []
-        still_pending = set()
-        for fname in filenames:
-            s = status_by_name.get(fname, "processing")
-            icon = {"ready": "✅", "failed": "❌", "processing": "⏳"}.get(s, "⏳")
-            lines.append(f"{icon} **{fname}** — {s}")
-            if s == "processing":
-                still_pending.add(fname)
+        still_pending = {}
+        
+        for doc_id, fname in document_ids:
+            if doc_id not in pending:
+                # Already completed, skip
+                continue
+                
+            status_data = fetch_document_status_by_id(doc_id)
+            if not status_data:
+                # Network error or not found, keep trying
+                lines.append(f"⏳ **{fname}** — queued")
+                still_pending[doc_id] = fname
+                continue
+            
+            status = status_data.get("status", "queued")
+            failure_reason = status_data.get("failure_reason")
+            
+            # Map status to icons
+            icon_map = {
+                "queued": "⏳",
+                "processing": "🔄",
+                "ready": "✅",
+                "failed": "❌",
+            }
+            icon = icon_map.get(status, "⏳")
+            
+            # Build status line
+            if status == "failed" and failure_reason:
+                lines.append(f"{icon} **{fname}** — {status}: {failure_reason[:50]}")
+            else:
+                lines.append(f"{icon} **{fname}** — {status}")
+            
+            # Keep polling if still in progress
+            if status in {"queued", "processing"}:
+                still_pending[doc_id] = fname
 
         status_placeholder.markdown("\n\n".join(lines))
 
@@ -425,8 +473,6 @@ def poll_ingestion_status(session_id: str, filenames: list[str]) -> None:
             break
         pending = still_pending
         _time.sleep(2)
-        # Streamlit re-runs on rerun, so we can't use st.rerun() inside a loop;
-        # the sleep+loop approach works here because we're inside a single run.
 
     status_placeholder.empty()
 
@@ -703,18 +749,24 @@ if chat_submission:
     # 1. If files were attached, upload/ingest them first so the backend
     #    can use them as context for the query in the same turn.
     upload_error = None
+    upload_result = None
     if attached_files:
         with st.spinner(f"Uploading {len(attached_files)} file(s)..."):
             try:
-                upload_documents(attached_files)
+                upload_result = upload_documents(attached_files)
             except (RuntimeError, requests.RequestException) as exc:
                 upload_error = str(exc)
 
         # Poll ingestion status so the user knows when documents are ready.
         # We only poll when upload succeeded — no point waiting on a failed upload.
-        if not upload_error:
-            uploaded_names = [f.name for f in attached_files]
-            poll_ingestion_status(st.session_state.current_session_id, uploaded_names)
+        if not upload_error and upload_result:
+            # Extract document_id and filename from upload response
+            uploaded_docs = upload_result.get("uploaded", [])
+            document_ids = [
+                (doc["document_id"], doc["filename"])
+                for doc in uploaded_docs
+            ]
+            poll_ingestion_status(document_ids)
 
     # 2. Build the user-facing message: an attachment note (if any) plus
     #    whatever text they typed.

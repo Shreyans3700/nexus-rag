@@ -40,6 +40,22 @@ RERANKER_CANDIDATE_K = int(os.getenv("RERANKER_CANDIDATE_K", "30"))
 RERANKER_TOP_K = int(os.getenv("RERANKER_TOP_K", str(MILVUS_TOP_K)))
 RERANKER_MAX_LENGTH = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
 
+# MinIO settings (object storage for uploaded documents)
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "documents")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() in {"true", "1", "yes"}
+
+# Redis settings (ARQ task queue broker)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+
+# ARQ worker settings
+ARQ_MAX_JOBS = int(os.getenv("ARQ_MAX_JOBS", "5"))
+ARQ_JOB_TIMEOUT = int(os.getenv("ARQ_JOB_TIMEOUT", "600"))
+
 # Embedding vector dimension for text-embedding-3-small
 EMBEDDING_DIM = 1536
 
@@ -219,6 +235,13 @@ async def set_environment(app: FastAPI):
                 CREATE INDEX IF NOT EXISTS documents_user_session_idx
                     ON documents (user_id, session_id);
                 """
+            )
+            # Add new columns for queue-based architecture
+            await connection.execute(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS object_name TEXT"
+            )
+            await connection.execute(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS failure_reason TEXT"
             )
 
             # --- RAG: chunk persistence table (Milvus fallback) ---
