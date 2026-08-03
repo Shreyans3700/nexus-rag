@@ -11,6 +11,23 @@
 # The Streamlit frontend is run separately: streamlit run frontend.py
 
 services:
+  redis:
+    container_name: chatbot-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - milvus-net
+
   etcd:
     container_name: milvus-etcd
     image: quay.io/coreos/etcd:v3.5.25
@@ -115,14 +132,43 @@ services:
     environment:
       # Override MILVUS_HOST — inside Docker, reach Milvus by its container name
       MILVUS_HOST: milvus-standalone
+      MINIO_ENDPOINT: minio:9000
+      REDIS_HOST: redis
     ports:
       - "8000:8000"
     depends_on:
+      redis:
+        condition: service_healthy
       milvus:
         condition: service_healthy
     networks:
       - milvus-net
     # host.docker.internal lets the container reach Postgres on the host machine
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    container_name: chatbot-worker
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "src.workers.worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Override for Docker networking
+      MILVUS_HOST: milvus-standalone
+      MINIO_ENDPOINT: minio:9000
+      REDIS_HOST: redis
+    depends_on:
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - milvus-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -141,6 +187,7 @@ networks:
     driver: bridge
 
 volumes:
+  redis_data:
   etcd_data:
   minio_data:
   milvus_data:

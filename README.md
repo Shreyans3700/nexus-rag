@@ -12,8 +12,48 @@ EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and O
 - **RAG pipeline**: upload PDF, DOCX, TXT, MD, or CSV files per session
 - **Milvus hybrid search**: semantic vectors + BM25 keyword ranking fused with RRF
 - **User-aware retrieval**: searches the current session first, then the user's other sessions when the current session has no documents
-- Background document ingestion (upload returns instantly, embedding happens async)
+- **Queue-based document ingestion**: upload returns instantly, processing happens asynchronously via ARQ workers
+- **Scalable worker architecture**: independent worker processes with retry logic and failure handling
 - Docker support for containerized deployment
+
+## Architecture
+
+```
+                   Client
+                     │
+                     ▼
+              FastAPI Upload API
+                     │
+        ┌────────────┴────────────┐
+        │                         │
+        ▼                         ▼
+   MinIO Storage           PostgreSQL Metadata
+ (original files)         (status, object_name)
+        │                         │
+        │                         │ Enqueue job
+        │                         ▼
+        │                   Redis (ARQ)
+        │                         │
+        │                ┌────────┴─────────┐
+        │                │  ARQ Workers     │
+        │                │  (scalable)      │
+        │                └────────┬─────────┘
+        │                         │
+        └─────────────────────────┘
+              Download & Process
+                     │
+        ┌────────────┴────────────┐
+        │                         │
+        ▼                         ▼
+   Milvus Vectors          PostgreSQL Chunks
+```
+
+**Document Ingestion Flow:**
+1. Client uploads file → API saves to MinIO and creates metadata row with status='queued'
+2. Job enqueued in Redis with document_id
+3. Worker downloads file from MinIO
+4. Worker calls existing parse → chunk → embed → store pipeline
+5. Status updates: queued → processing → ready/failed
 
 ## Tech Stack
 
@@ -24,6 +64,9 @@ EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and O
 - asyncpg
 - PostgreSQL
 - Milvus (vector store)
+- MinIO (object storage)
+- Redis (task queue)
+- ARQ (async task workers)
 - Streamlit
 - Docker
 
@@ -69,19 +112,38 @@ RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2
 RERANKER_CANDIDATE_K=30
 RERANKER_TOP_K=5
 RERANKER_MAX_LENGTH=512
+
+# MinIO (object storage for uploaded documents)
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=documents
+MINIO_SECURE=false
+
+# Redis (ARQ task queue broker)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+
+# ARQ worker settings
+ARQ_MAX_JOBS=5
+ARQ_JOB_TIMEOUT=600
 ```
 
 ## Local Development
 
-1. **Start Milvus** (requires Docker):
+1. **Start infrastructure services** (requires Docker):
 
 ```bash
-docker compose up -d
+docker compose up -d redis milvus minio etcd
 ```
 
-This starts etcd, MinIO, Milvus Standalone on port `19530`, and Attu at
-`http://localhost:8001` for direct collection and chunk inspection. In Attu,
-connect to `milvus:19530` with the configured Milvus credentials.
+This starts:
+- Redis (ARQ task queue broker) on port `6379`
+- etcd (Milvus dependency)
+- MinIO (object storage) on ports `9000` (API) and `9001` (console)
+- Milvus Standalone on port `19530`
+- Attu (Milvus admin UI) at `http://localhost:8001`
 
 ### Inspecting chunks with Attu
 
@@ -129,13 +191,19 @@ pip install -r requirements.txt
 uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-5. Start the Streamlit frontend:
+5. Start the ARQ worker (in a separate terminal):
+
+```bash
+python -m src.workers.worker
+```
+
+6. Start the Streamlit frontend (in another terminal):
 
 ```bash
 streamlit run frontend.py
 ```
 
-The API will be available at `http://localhost:8000` and the frontend at `http://localhost:8501`.
+The API will be available at `http://localhost:8000`, the frontend at `http://localhost:8501`, and MinIO console at `http://localhost:9001`.
 
 ## Tests
 
@@ -162,7 +230,7 @@ docker compose --profile test run --rm tests
 
 1. Log in from the sidebar.
 2. In the chat input, attach one or more files (PDF, DOCX, TXT, MD, CSV).
-3. The frontend shows per-file ingestion status (⏳ processing → ✅ ready).
+3. The frontend shows per-file ingestion status (⏳ queued → 🔄 processing → ✅ ready).
 4. Once ready, ask questions — answers will be grounded in your document content.
 5. Documents in the current session are searched first. If it has no indexed documents, the search includes the user's documents from other sessions.
 
@@ -213,6 +281,10 @@ curl -X POST http://localhost:8000/documents/upload \
   -F "files=@report.pdf" \
   -F "files=@notes.txt"
 
+# Check document status
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/documents/{document_id}/status"
+
 # List documents for a session
 curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8000/documents?session_id=demo-session"
@@ -244,6 +316,18 @@ docker build -t chatbot .
 docker run --env-file .env -p 8000:8000 chatbot
 ```
 
+**Scaling workers:**
+
+The worker service can be scaled independently to handle higher upload volume:
+
+```bash
+# Run 3 worker instances
+docker compose up -d --scale worker=3
+
+# Check worker logs
+docker compose logs -f worker
+```
+
 ## Notes
 
 - The context sent to the model is trimmed to the most recent configured number of messages. Update `MAX_CHAT_HISTORY_MESSAGES` in `.env` to change the window.
@@ -253,4 +337,7 @@ docker run --env-file .env -p 8000:8000 chatbot
   `RERANKER_TOP_K`, and sends only those chunks to the LLM. The model is
   downloaded when it is first used, so the first RAG request may take longer.
 - The streaming endpoint falls back to the final end-of-stream answer when a model emits empty chunks.
-- Document ingestion is asynchronous — the upload endpoint returns `202 Accepted` immediately. Poll `GET /documents?session_id=...` to watch status change from `processing` to `ready`.
+- Document ingestion is asynchronous — the upload endpoint returns `202 Accepted` immediately. Poll `GET /documents/{document_id}/status` to watch status change from `queued` → `processing` → `ready`/`failed`.
+
+
+
