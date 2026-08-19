@@ -2,7 +2,6 @@
 from dataclasses import dataclass
 import re
 
-from langchain_openai import OpenAIEmbeddings
 from pymilvus import AnnSearchRequest, MilvusClient, RRFRanker
 
 from src.config.config import (
@@ -16,10 +15,9 @@ from src.config.config import (
 )
 from src.documents.reranker import rerank_chunks
 from src.logger import get_logger
+from src.services.embedding_service import embedding_service
 
 logger = get_logger(__name__)
-
-_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
 
 @dataclass(frozen=True)
@@ -33,6 +31,22 @@ class RetrievalResult:
 _CITATION_PATTERN = re.compile(r"\\?\[\^?(\d+(?:\s*,\s*\d+)*)\\?]")
 
 
+def _dedupe_by_page(sources: list[dict]) -> list[dict]:
+    """Collapse multiple chunk citations that point at the same
+    (filename, page) into a single entry, keeping the first (lowest
+    citation number) occurrence. Several retrieved chunks commonly come
+    from the same page, which would otherwise list that page once per chunk."""
+    seen = set()
+    deduped = []
+    for source in sources:
+        key = (source["filename"], source["page"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(source)
+    return deduped
+
+
 def cited_sources(answer: str, sources: list[dict]) -> list[dict]:
     """Return sources explicitly cited as ``[n]`` in the answer.
 
@@ -41,7 +55,8 @@ def cited_sources(answer: str, sources: list[dict]) -> list[dict]:
     brackets (``[1][2]``), markdown-escaped brackets (``\\[1\\]``), and
     footnote-style markers (``[^1]``). If the model retrieved context but
     tagged nothing explicitly, falls back to all retrieved sources rather
-    than losing citation/page data entirely.
+    than losing citation/page data entirely. Either way, sources that share
+    the same (filename, page) are collapsed to one entry.
     """
     cited_numbers = {
         int(number)
@@ -49,9 +64,7 @@ def cited_sources(answer: str, sources: list[dict]) -> list[dict]:
         for number in re.split(r"\s*,\s*", group)
     }
     explicitly_cited = [source for source in sources if source["citation"] in cited_numbers]
-    if explicitly_cited:
-        return explicitly_cited
-    return sources
+    return _dedupe_by_page(explicitly_cited or sources)
 
 
 def _format_context(chunks: list[dict]) -> str:
@@ -78,11 +91,11 @@ def _filter_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _scope_filter(user_id: str, session_id: str | None = None) -> str:
-    user_filter = f'user_id == "{_filter_value(user_id)}"'
-    if session_id is None:
-        return user_filter
-    return f'{user_filter} and session_id == "{_filter_value(session_id)}"'
+def _scope_filter(user_id: str, session_id: str) -> str:
+    return (
+        f'user_id == "{_filter_value(user_id)}" '
+        f'and session_id == "{_filter_value(session_id)}"'
+    )
 
 
 def _has_chunks(milvus_client: MilvusClient, filter_expr: str) -> bool:
@@ -144,42 +157,31 @@ async def retrieve_context(
     milvus_client: MilvusClient,
     top_k: int = MILVUS_TOP_K,
 ) -> RetrievalResult:
-    """Retrieve hybrid-ranked context, preferring the active session's documents."""
+    """Retrieve hybrid-ranked context from the active session's documents only."""
     if not query.strip():
         return RetrievalResult(context="", sources=[])
 
-    session_filter = _scope_filter(user_id, session_id)
+    filter_expr = _scope_filter(user_id, session_id)
     try:
-        filter_expr = session_filter
-        scope = "session"
-        if not _has_chunks(milvus_client, session_filter):
-            logger.debug(
-                "No session-scoped chunks; broadening retrieval: user_id=%s session_id=%s",
+        if not _has_chunks(milvus_client, filter_expr):
+            logger.info(
+                "SOURCES-TRACE: no indexed chunks for this session — sources will be empty: "
+                "user_id=%s session_id=%s",
                 user_id,
                 session_id,
             )
-            filter_expr = _scope_filter(user_id)
-            scope = "user"
-            if not _has_chunks(milvus_client, filter_expr):
-                logger.info(
-                    "SOURCES-TRACE: no indexed chunks for this user at all — sources will be empty: "
-                    "user_id=%s session_id=%s",
-                    user_id,
-                    session_id,
-                )
-                return RetrievalResult(context="", sources=[])
+            return RetrievalResult(context="", sources=[])
 
         logger.debug(
-            "Running hybrid retrieval: user_id=%s session_id=%s scope=%s candidates=%s rerank_enabled=%s",
+            "Running hybrid retrieval: user_id=%s session_id=%s candidates=%s rerank_enabled=%s",
             user_id,
             session_id,
-            scope,
             RERANKER_CANDIDATE_K
             if RERANKER_ENABLED
             else max(top_k, MILVUS_HYBRID_CANDIDATE_K),
             RERANKER_ENABLED,
         )
-        query_vector = await _embeddings.aembed_query(query)
+        query_vector = await embedding_service.aembed_query(query)
         retrieval_k = RERANKER_CANDIDATE_K if RERANKER_ENABLED else top_k
         chunks = _hybrid_search(
             milvus_client=milvus_client,
@@ -204,10 +206,9 @@ async def retrieve_context(
                 )
                 chunks = chunks[:top_k]
         logger.info(
-            "Hybrid retrieval: user_id=%s session_id=%s scope=%s chunks_returned=%s reranked=%s",
+            "Hybrid retrieval: user_id=%s session_id=%s chunks_returned=%s reranked=%s",
             user_id,
             session_id,
-            scope,
             len(chunks),
             RERANKER_ENABLED,
         )

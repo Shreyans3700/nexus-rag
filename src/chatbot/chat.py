@@ -97,7 +97,11 @@ async def get_answer(
     )
 
     metadata = response.response_metadata
-    token_usage = metadata.get("token_usage") or {}
+    # Prefer the provider-specific usage shape (OpenAI's "token_usage"), but
+    # fall back to LangChain's cross-provider usage_metadata field — needed
+    # when a fallback model from a different provider (see ModelService)
+    # served this response and doesn't populate "token_usage".
+    token_usage = metadata.get("token_usage") or getattr(response, "usage_metadata", None) or {}
     final_response = str(response.content)
     raw_sources_count = len(sources)
     sources = cited_sources(final_response, sources)
@@ -109,7 +113,7 @@ async def get_answer(
         len(sources),
         final_response[:300],
     )
-    model_used = str(metadata.get("model_name", "unknown"))
+    model_used = str(metadata.get("model_name") or metadata.get("model") or "unknown")
     finish_reason = str(metadata.get("finish_reason", "unknown"))
     total_token_used = int(token_usage.get("total_tokens", 0))
     time_taken = float(token_usage.get("total_time", 0.0))

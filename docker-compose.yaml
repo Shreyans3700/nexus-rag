@@ -1,4 +1,4 @@
-# Full stack: FastAPI chatbot + Milvus (etcd + MinIO + Milvus Standalone).
+# Full stack: FastAPI chatbot + React frontend + Milvus (etcd + MinIO + Milvus Standalone).
 # PostgreSQL runs on the host machine — reachable via host.docker.internal.
 #
 # Usage:
@@ -8,7 +8,7 @@
 #   docker compose down -v             # stop and wipe ALL data (fresh start)
 #
 # The FastAPI app is available at: http://localhost:8000
-# The Streamlit frontend is run separately: streamlit run frontend.py
+# The React frontend is available at: http://localhost:5173
 
 services:
   redis:
@@ -134,6 +134,9 @@ services:
       MILVUS_HOST: milvus-standalone
       MINIO_ENDPOINT: minio:9000
       REDIS_HOST: redis
+      # Postgres runs on the host machine, not in a container — "localhost"
+      # inside the container would resolve to the container itself.
+      PG_HOST: host.docker.internal
     ports:
       - "8000:8000"
     depends_on:
@@ -160,6 +163,7 @@ services:
       MILVUS_HOST: milvus-standalone
       MINIO_ENDPOINT: minio:9000
       REDIS_HOST: redis
+      PG_HOST: host.docker.internal
     depends_on:
       redis:
         condition: service_healthy
@@ -171,6 +175,20 @@ services:
       - milvus-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  frontend:
+    container_name: chatbot-frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - chatbot
+    networks:
+      - milvus-net
 
   # Opt-in unit test runner. It uses the application image but does not start
   # or require external services because the unit suite mocks those boundaries.

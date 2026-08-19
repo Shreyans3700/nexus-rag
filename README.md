@@ -11,7 +11,7 @@ EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and O
 - Configurable recent-message context window via environment variable
 - **RAG pipeline**: upload PDF, DOCX, TXT, MD, or CSV files per session
 - **Milvus hybrid search**: semantic vectors + BM25 keyword ranking fused with RRF
-- **User-aware retrieval**: searches the current session first, then the user's other sessions when the current session has no documents
+- **Session-scoped retrieval**: only searches documents uploaded to the current session — no cross-session leakage
 - **Queue-based document ingestion**: upload returns instantly, processing happens asynchronously via ARQ workers
 - **Scalable worker architecture**: independent worker processes with retry logic and failure handling
 - Docker support for containerized deployment
@@ -67,7 +67,7 @@ EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and O
 - MinIO (object storage)
 - Redis (task queue)
 - ARQ (async task workers)
-- Streamlit
+- React (Vite + TypeScript + Tailwind)
 - Docker
 
 ## Prerequisites
@@ -82,14 +82,33 @@ Before running the project, make sure you have:
 
 ## Environment Variables
 
-Create a `.env` file in the project root with the following variables:
+Copy `.env.example` to `.env` and fill in the secrets — it documents every
+variable with the same defaults described below.
 
 ```env
 OPENAI_API_KEY=your_openai_api_key
 JWT_SECRET=your_long_random_jwt_secret
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 PASSWORD_HASH_ITERATIONS=210000
+
+# Origin the React frontend is served from — required for browser CORS.
+FRONTEND_ORIGIN=http://localhost:5173
+
 LLM_MODEL=gpt-4o-mini
+LLM_TEMPERATURE=0.6
+LLM_MAX_TOKENS=6000
+
+# Optional: chat model fallback (comma-separated provider:model list, tried
+# in order). Defaults to a single "openai:$LLM_MODEL" entry.
+# LLM_FALLBACK_CHAIN=openai:gpt-4o-mini,openai:gpt-4o
+
+EMBEDDING_MODEL=text-embedding-3-small
+# Optional: embedding model fallback, same "provider:model" format.
+# Every configured model MUST produce vectors of the same dimension as
+# EMBEDDING_DIM below — mixing dimensions corrupts retrieval.
+# EMBEDDING_FALLBACK_CHAIN=openai:text-embedding-3-small,openai:text-embedding-3-large
+EMBEDDING_DIM=1536
+
 PG_HOST=localhost
 PG_PORT=5432
 PG_DATABASE=LangchainDB
@@ -105,6 +124,7 @@ MILVUS_COLLECTION_NAME=doc_chunks
 MILVUS_TOP_K=5
 MILVUS_HYBRID_CANDIDATE_K=20
 MILVUS_RRF_K=60
+MILVUS_TOKEN=root:Milvus
 
 # Cross-encoder reranking (local model, loaded on first retrieval)
 RERANKER_ENABLED=true
@@ -128,6 +148,8 @@ REDIS_DB=0
 # ARQ worker settings
 ARQ_MAX_JOBS=5
 ARQ_JOB_TIMEOUT=600
+
+LOG_LEVEL=INFO
 ```
 
 ## Local Development
@@ -148,7 +170,7 @@ This starts:
 ### Inspecting chunks with Attu
 
 Attu is a local Milvus administration UI. It is independent of the FastAPI and
-Streamlit applications, so chunk inspection does not expose an additional
+React applications, so chunk inspection does not expose an additional
 chatbot API endpoint.
 
 1. Start or update the service:
@@ -197,13 +219,15 @@ uvicorn app:app --reload --host 0.0.0.0 --port 8000
 python -m src.workers.worker
 ```
 
-6. Start the Streamlit frontend (in another terminal):
+6. Start the React frontend (in another terminal):
 
 ```bash
-streamlit run frontend.py
+cd frontend
+npm install
+npm run dev
 ```
 
-The API will be available at `http://localhost:8000`, the frontend at `http://localhost:8501`, and MinIO console at `http://localhost:9001`.
+The API will be available at `http://localhost:8000`, the frontend at `http://localhost:5173`, and MinIO console at `http://localhost:9001`. See `frontend/README.md` for frontend-specific details (env vars, build, Docker).
 
 ## Tests
 
@@ -226,13 +250,27 @@ docker compose --profile test run --rm tests
 - `POST /auth/login` — verifies credentials and returns an access token.
 - Authenticated requests must include `Authorization: Bearer <token>`.
 
+### Rate limiting
+
+Per-IP limits, backed by Redis (`REDIS_HOST`/`PORT`/`DB`, the same instance used
+by the ARQ queue) so they hold across multiple worker processes:
+
+| Endpoint                    | Limit      |
+| ---------------------------- | ---------- |
+| `POST /auth/login`           | 10/minute  |
+| `POST /auth/signup`          | 5/minute   |
+| `POST /chat`, `/chat/stream` | 20/minute  |
+| `POST /documents/upload`     | 10/minute  |
+
+A rate-limited request receives `429 Too Many Requests`.
+
 ## RAG Usage
 
 1. Log in from the sidebar.
 2. In the chat input, attach one or more files (PDF, DOCX, TXT, MD, CSV).
 3. The frontend shows per-file ingestion status (⏳ queued → 🔄 processing → ✅ ready).
 4. Once ready, ask questions — answers will be grounded in your document content.
-5. Documents in the current session are searched first. If it has no indexed documents, the search includes the user's documents from other sessions.
+5. Only documents uploaded to the current session are searched — a session with no documents gets no RAG context, regardless of what you've uploaded elsewhere.
 
 ### Milvus migration
 
@@ -303,13 +341,19 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ## Docker
 
-Start the full stack (Milvus + etcd + MinIO) with:
+Start the full stack (Milvus + etcd + MinIO + FastAPI + React frontend) with:
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-To also containerize the FastAPI app, build and run:
+The API is available at `http://localhost:8000` and the frontend at
+`http://localhost:5173`. The frontend image bakes `VITE_API_BASE_URL` in at
+build time (see `docker-compose.yaml`'s `frontend.build.args`) since Vite
+inlines `VITE_*` vars into the static bundle — rebuild the `frontend` service
+if that URL changes.
+
+To containerize just the FastAPI app on its own:
 
 ```bash
 docker build -t chatbot .
