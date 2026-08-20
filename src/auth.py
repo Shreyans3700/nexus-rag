@@ -9,14 +9,13 @@ import secrets
 import time
 from typing import Any
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 
 from src.config.config import (
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     PASSWORD_HASH_ITERATIONS,
 )
 from src.logger import get_logger, set_user_id
-from src.routes.dependencies import get_db
 from src.schema.models import CurrentUser
 
 logger = get_logger(__name__)
@@ -167,9 +166,13 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return token.strip()
 
 
+def _get_db(request: Request) -> Any:
+    return request.app.state.db
+
+
 async def get_current_user(
     authorization: str | None = Header(default=None),
-    db=Depends(get_db),
+    db=Depends(_get_db),
 ) -> CurrentUser:
     logger.debug("Authenticating request")
     token = _extract_bearer_token(authorization)

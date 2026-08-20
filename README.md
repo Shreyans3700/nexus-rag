@@ -1,6 +1,6 @@
-# Nexus RAG
+# nexus-rag
 
-Nexus RAG is a FastAPI-based chatbot application that uses LangChain and OpenAI to generate responses while keeping chat history in PostgreSQL for each authenticated user. It includes a full **RAG (Retrieval-Augmented Generation) pipeline** - upload documents to a session, and the chatbot will ground its answers using the most relevant chunks from those documents.
+EndToEndChatBot is a FastAPI-based chatbot application that uses LangChain and OpenAI to generate responses while keeping chat history in PostgreSQL for each authenticated user. It includes a full **RAG (Retrieval-Augmented Generation) pipeline** — upload documents to a session, and the chatbot will ground its answers using the most relevant chunks from those documents.
 
 ## Features
 
@@ -11,7 +11,7 @@ Nexus RAG is a FastAPI-based chatbot application that uses LangChain and OpenAI 
 - Configurable recent-message context window via environment variable
 - **RAG pipeline**: upload PDF, DOCX, TXT, MD, or CSV files per session
 - **Milvus hybrid search**: semantic vectors + BM25 keyword ranking fused with RRF
-- **Session-scoped retrieval**: only searches documents uploaded to the current session - no cross-session leakage
+- **Session-scoped retrieval**: only searches documents uploaded to the current session — no cross-session leakage
 - **Queue-based document ingestion**: upload returns instantly, processing happens asynchronously via ARQ workers
 - **Scalable worker architecture**: independent worker processes with retry logic and failure handling
 - Docker support for containerized deployment
@@ -19,41 +19,41 @@ Nexus RAG is a FastAPI-based chatbot application that uses LangChain and OpenAI 
 ## Architecture
 
 ```
-                    Client
-                      |
-                      v
-               FastAPI Upload API
-                      |
-         +------------+------------+
-         |                         |
-         v                         v
-    MinIO Storage           PostgreSQL Metadata
-  (original files)         (status, object_name)
-         |                         |
-         |                         | Enqueue job
-         |                         v
-         |                   Redis (ARQ)
-         |                         |
-         |                 +-------+--------+
-         |                 |  ARQ Workers   |
-         |                 |  (scalable)    |
-         |                 +-------+--------+
-         |                         |
-         +-------------------------+
-               Download and process
-                      |
-         +------------+------------+
-         |                         |
-         v                         v
-    Milvus Vectors          PostgreSQL Chunks
+                   Client
+                     │
+                     ▼
+              FastAPI Upload API
+                     │
+        ┌────────────┴────────────┐
+        │                         │
+        ▼                         ▼
+   MinIO Storage           PostgreSQL Metadata
+ (original files)         (status, object_name)
+        │                         │
+        │                         │ Enqueue job
+        │                         ▼
+        │                   Redis (ARQ)
+        │                         │
+        │                ┌────────┴─────────┐
+        │                │  ARQ Workers     │
+        │                │  (scalable)      │
+        │                └────────┬─────────┘
+        │                         │
+        └─────────────────────────┘
+              Download & Process
+                     │
+        ┌────────────┴────────────┐
+        │                         │
+        ▼                         ▼
+   Milvus Vectors          PostgreSQL Chunks
 ```
 
 **Document Ingestion Flow:**
-1. Client uploads file -> API saves to MinIO and creates metadata row with status='queued'
+1. Client uploads file → API saves to MinIO and creates metadata row with status='queued'
 2. Job enqueued in Redis with document_id
 3. Worker downloads file from MinIO
-4. Worker calls the existing parse -> chunk -> embed -> store pipeline
-5. Status updates: queued -> processing -> ready/failed
+4. Worker calls existing parse → chunk → embed → store pipeline
+5. Status updates: queued → processing → ready/failed
 
 ## Tech Stack
 
@@ -82,8 +82,8 @@ Before running the project, make sure you have:
 
 ## Environment Variables
 
-Create a `.env` file and fill in the required secrets. The following
-template documents the supported settings and their development defaults.
+Copy `.env.example` to `.env` and fill in the secrets — it documents every
+variable with the same defaults described below.
 
 ```env
 OPENAI_API_KEY=your_openai_api_key
@@ -91,7 +91,7 @@ JWT_SECRET=your_long_random_jwt_secret
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 PASSWORD_HASH_ITERATIONS=210000
 
-# Origin the React frontend is served from - required for browser CORS.
+# Origin the React frontend is served from — required for browser CORS.
 FRONTEND_ORIGIN=http://localhost:5173
 
 LLM_MODEL=gpt-4o-mini
@@ -105,7 +105,7 @@ LLM_MAX_TOKENS=6000
 EMBEDDING_MODEL=text-embedding-3-small
 # Optional: embedding model fallback, same "provider:model" format.
 # Every configured model MUST produce vectors of the same dimension as
-# EMBEDDING_DIM below - mixing dimensions corrupts retrieval.
+# EMBEDDING_DIM below — mixing dimensions corrupts retrieval.
 # EMBEDDING_FALLBACK_CHAIN=openai:text-embedding-3-small,openai:text-embedding-3-large
 EMBEDDING_DIM=1536
 
@@ -157,7 +157,7 @@ LOG_LEVEL=INFO
 1. **Start infrastructure services** (requires Docker):
 
 ```bash
-docker compose up -d redis milvus minio etcd attu
+docker compose up -d redis milvus minio etcd
 ```
 
 This starts:
@@ -180,7 +180,7 @@ chatbot API endpoint.
    ```
 
 2. Open [http://localhost:8001](http://localhost:8001).
-3. Connect using the Docker-network address `milvus:19530` - do **not** use
+3. Connect using the Docker-network address `milvus:19530` — do **not** use
    `localhost:19530`, which would refer to the Attu container itself.
 4. Authenticate with the value configured in `MILVUS_TOKEN`. The development
    Compose configuration uses the standard `root` username and `Milvus`
@@ -246,8 +246,8 @@ docker compose --profile test run --rm tests
 
 ## Authentication
 
-- `POST /auth/signup` - creates a user and returns an access token.
-- `POST /auth/login` - verifies credentials and returns an access token.
+- `POST /auth/signup` — creates a user and returns an access token.
+- `POST /auth/login` — verifies credentials and returns an access token.
 - Authenticated requests must include `Authorization: Bearer <token>`.
 
 ### Rate limiting
@@ -268,9 +268,9 @@ A rate-limited request receives `429 Too Many Requests`.
 
 1. Log in from the sidebar.
 2. In the chat input, attach one or more files (PDF, DOCX, TXT, MD, CSV).
-3. The frontend shows per-file ingestion status (`queued` -> `processing` -> `ready`).
-4. Once ready, ask questions - answers will be grounded in your document content.
-5. Only documents uploaded to the current session are searched - a session with no documents gets no RAG context, regardless of what you've uploaded elsewhere.
+3. The frontend shows per-file ingestion status (⏳ queued → 🔄 processing → ✅ ready).
+4. Once ready, ask questions — answers will be grounded in your document content.
+5. Only documents uploaded to the current session are searched — a session with no documents gets no RAG context, regardless of what you've uploaded elsewhere.
 
 ### Milvus migration
 
@@ -350,7 +350,7 @@ docker compose up -d --build
 The API is available at `http://localhost:8000` and the frontend at
 `http://localhost:5173`. The frontend image bakes `VITE_API_BASE_URL` in at
 build time (see `docker-compose.yaml`'s `frontend.build.args`) since Vite
-inlines `VITE_*` vars into the static bundle - rebuild the `frontend` service
+inlines `VITE_*` vars into the static bundle — rebuild the `frontend` service
 if that URL changes.
 
 To containerize just the FastAPI app on its own:
@@ -374,14 +374,14 @@ docker compose logs -f worker
 
 ## Notes
 
-- The context sent to the model is trimmed to the configured token budget. Update `MAX_CHAT_TOKENS` in `.env` to change that budget.
+- The context sent to the model is trimmed to the most recent configured number of messages. Update `MAX_CHAT_HISTORY_MESSAGES` in `.env` to change the window.
 - `MILVUS_TOP_K` controls how many document chunks are retrieved per query (default 5).
 - When `RERANKER_ENABLED=true`, the app retrieves up to `RERANKER_CANDIDATE_K`
   hybrid-search candidates, uses a local cross-encoder to select the best
   `RERANKER_TOP_K`, and sends only those chunks to the LLM. The model is
   downloaded when it is first used, so the first RAG request may take longer.
 - The streaming endpoint falls back to the final end-of-stream answer when a model emits empty chunks.
-- Document ingestion is asynchronous - the upload endpoint returns `202 Accepted` immediately. Poll `GET /documents/{document_id}/status` to watch status change from `queued` -> `processing` -> `ready`/`failed`.
+- Document ingestion is asynchronous — the upload endpoint returns `202 Accepted` immediately. Poll `GET /documents/{document_id}/status` to watch status change from `queued` → `processing` → `ready`/`failed`.
 
 
 
