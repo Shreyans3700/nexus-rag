@@ -100,11 +100,11 @@ async def shutdown(ctx: dict) -> None:
     logger.info("Worker shutdown complete")
 
 
-class WorkerSettingsWithHooks(WorkerSettings):
-    """WorkerSettings with startup/shutdown hooks."""
-
-    on_startup = startup
-    on_shutdown = shutdown
+# arq.worker.get_kwargs() reads settings_cls.__dict__ directly, ignoring
+# inherited attributes — so subclassing WorkerSettings to add hooks silently
+# drops `functions`, `redis_settings`, etc. Attach the hooks directly instead.
+WorkerSettings.on_startup = startup
+WorkerSettings.on_shutdown = shutdown
 
 
 def main() -> None:
@@ -113,7 +113,7 @@ def main() -> None:
     logger.info("Press Ctrl+C to stop")
 
     # Run worker (blocks until SIGTERM/SIGINT)
-    run_worker(WorkerSettingsWithHooks)
+    run_worker(WorkerSettings)
 
 
 if __name__ == "__main__":

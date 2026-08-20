@@ -4,19 +4,17 @@ from contextlib import asynccontextmanager
 import asyncpg
 from fastapi import FastAPI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_openai import ChatOpenAI
 from pymilvus import DataType, Function, FunctionType, MilvusClient
 
 from src.config.prompts import system_prompt, title_prompt
 from src.logger import get_logger
+from src.services.model_service import ModelService
 
 MAX_CHAT_TOKENS = int(os.getenv("MAX_CHAT_TOKENS", "2500"))
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
     os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 )
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "210000"))
-
-chat_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 # Milvus settings
 MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
@@ -56,8 +54,12 @@ REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 ARQ_MAX_JOBS = int(os.getenv("ARQ_MAX_JOBS", "5"))
 ARQ_JOB_TIMEOUT = int(os.getenv("ARQ_JOB_TIMEOUT", "600"))
 
-# Embedding vector dimension for text-embedding-3-small
-EMBEDDING_DIM = 1536
+# Embedding vector dimension — must match whatever EMBEDDING_FALLBACK_CHAIN's
+# first entry actually produces. Defaults to 1536 for OpenAI's
+# text-embedding-3-small. Common alternatives if you switch embedding models:
+# 384 for BAAI/bge-small-en-v1.5, 768 for bge-base-en-v1.5 / nomic-embed-text.
+# Changing this requires recreating the Milvus collection (see README).
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
 
 
 def required_setting(name: str) -> str:
@@ -69,13 +71,12 @@ def required_setting(name: str) -> str:
 
 logger = get_logger(__name__)
 
-llm = ChatOpenAI(
-    model=chat_model,
-    api_key=required_setting("OPENAI_API_KEY"),
-    temperature=0.6,
-    max_retries=3,
-    max_tokens=6000,
-)
+# ModelService holds the primary chat model plus any configured fallbacks
+# (see src/services/model_service.py). chat_model is kept as the primary
+# model's name for callers that only need it for things like tiktoken
+# encoding lookups (src/database/fetch_data.py).
+model_service = ModelService.from_env()
+chat_model = model_service.primary_model
 
 
 def _bootstrap_milvus_collection(client: MilvusClient, collection_name: str) -> None:
@@ -161,8 +162,8 @@ async def set_environment(app: FastAPI):
             ("human", "{query}"),
         ]
     )
-    app.state.chain = app.state.qa_prompt | llm
-    app.state.title_chain = app.state.title_prompt | llm
+    app.state.chain = app.state.qa_prompt | model_service.runnable
+    app.state.title_chain = app.state.title_prompt | model_service.runnable
 
     # ------------------------------------------------------------------ #
     # PostgreSQL pool + schema                                            #

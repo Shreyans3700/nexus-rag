@@ -13,17 +13,14 @@ so the ingestor can mark the document as 'failed'.
 """
 import uuid
 
-from langchain_openai import OpenAIEmbeddings
 from pymilvus import MilvusClient
 
 from src.config.config import MILVUS_COLLECTION_NAME
 from src.documents.chunker import DocumentChunk
 from src.logger import get_logger
+from src.services.embedding_service import embedding_service
 
 logger = get_logger(__name__)
-
-# Module-level embeddings client — stateless, safe to share across calls.
-_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
 # Milvus VARCHAR field character limit (must match the schema in config.py)
 _TEXT_MAX_LEN = 4096
@@ -78,7 +75,7 @@ async def embed_and_store(
     # 1. Embed all chunks in one batched call
     # ------------------------------------------------------------------
     try:
-        vectors = await _embeddings.aembed_documents([chunk.text for chunk in chunks])
+        vectors = await embedding_service.aembed_documents([chunk.text for chunk in chunks])
     except Exception as exc:
         logger.exception(
             "OpenAI embedding failed: document_id=%s chunks=%s", document_id, len(chunks)

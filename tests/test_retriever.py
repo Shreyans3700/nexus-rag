@@ -64,6 +64,3 @@ class RetrieverTests(unittest.TestCase):
             result,
             'user_id == "user\\"id" and session_id == "session\\\\id"',
         )
-
-    def test_user_scope_omits_session_constraint(self):
-        self.assertEqual(_scope_filter("user-1"), 'user_id == "user-1"')

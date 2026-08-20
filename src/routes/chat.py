@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from src.auth import get_current_user
@@ -7,6 +7,7 @@ from src.chatbot.stream import stream_answer
 from src.database.exceptions import SessionAccessError
 from src.database.fetch_data import get_session_context_from_db
 from src.logger import get_logger
+from src.rate_limit import limiter
 from src.routes.dependencies import get_chain, get_db, get_milvus, get_title_chain
 from src.schema.models import RequestModel, ResponseModel
 
@@ -16,8 +17,10 @@ router = APIRouter(tags=["chat"])
 
 
 @router.post("/chat", response_model=ResponseModel)
+@limiter.limit("20/minute")
 async def chat_with_bot(
-    request: RequestModel,
+    request: Request,
+    body: RequestModel,
     db=Depends(get_db),
     chain=Depends(get_chain),
     title_chain=Depends(get_title_chain),
@@ -26,13 +29,13 @@ async def chat_with_bot(
 ) -> ResponseModel:
     logger.debug(
         "Chat request received: session_id=%s user_id=%s query_len=%s",
-        request.session_id,
+        body.session_id,
         current_user.id,
-        len(request.user_query),
+        len(body.user_query),
     )
     try:
         session_context = await get_session_context_from_db(
-            session_id=request.session_id,
+            session_id=body.session_id,
             user_id=current_user.id,
             db=db,
         )
@@ -43,9 +46,9 @@ async def chat_with_bot(
             )
 
         response = await get_answer(
-            session_id=request.session_id,
+            session_id=body.session_id,
             user_id=current_user.id,
-            user_query=request.user_query,
+            user_query=body.user_query,
             chain=chain,
             title_chain=title_chain,
             db=db,
@@ -62,7 +65,7 @@ async def chat_with_bot(
     except Exception as error:
         logger.exception(
             "Chat request failed: session_id=%s user_id=%s",
-            request.session_id,
+            body.session_id,
             current_user.id,
         )
         raise HTTPException(
@@ -72,12 +75,12 @@ async def chat_with_bot(
 
     logger.info(
         "Chat request completed: session_id=%s user_id=%s",
-        request.session_id,
+        body.session_id,
         current_user.id,
     )
     return ResponseModel(
-        session_id=request.session_id,
-        user_query=request.user_query,
+        session_id=body.session_id,
+        user_query=body.user_query,
         answer=response["answer"],
         model_used=response["model_used"],
         tokens_used=response["tokens"],
@@ -88,8 +91,10 @@ async def chat_with_bot(
 
 
 @router.post("/chat/stream")
+@limiter.limit("20/minute")
 async def stream_chat(
-    request: RequestModel,
+    request: Request,
+    body: RequestModel,
     db=Depends(get_db),
     chain=Depends(get_chain),
     title_chain=Depends(get_title_chain),
@@ -98,13 +103,13 @@ async def stream_chat(
 ) -> StreamingResponse:
     logger.debug(
         "Stream request received: session_id=%s user_id=%s query_len=%s",
-        request.session_id,
+        body.session_id,
         current_user.id,
-        len(request.user_query),
+        len(body.user_query),
     )
     try:
         session_context = await get_session_context_from_db(
-            session_id=request.session_id,
+            session_id=body.session_id,
             user_id=current_user.id,
             db=db,
         )
@@ -116,9 +121,9 @@ async def stream_chat(
 
         return StreamingResponse(
             stream_answer(
-                session_id=request.session_id,
+                session_id=body.session_id,
                 user_id=current_user.id,
-                user_query=request.user_query,
+                user_query=body.user_query,
                 chain=chain,
                 db=db,
                 title_chain=title_chain,
@@ -138,7 +143,7 @@ async def stream_chat(
     except Exception as error:
         logger.exception(
             "Stream request failed: session_id=%s user_id=%s",
-            request.session_id,
+            body.session_id,
             current_user.id,
         )
         raise HTTPException(

@@ -10,12 +10,13 @@ import os
 import uuid
 from typing import List
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, status
 
 from src.auth import get_current_user
 from src.config.arq_config import get_redis_pool
 from src.config.config import MILVUS_COLLECTION_NAME
 from src.logger import get_logger
+from src.rate_limit import limiter
 from src.routes.dependencies import get_db, get_milvus
 from src.storage.minio_client import get_minio_client
 
@@ -43,7 +44,9 @@ def _check_extension(filename: str) -> None:
 # POST /documents/upload
 # ---------------------------------------------------------------------------
 @router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("10/minute")
 async def upload_documents(
+    request: Request,
     files: List[UploadFile],
     session_id: str = Form(..., min_length=1, max_length=128),
     db=Depends(get_db),

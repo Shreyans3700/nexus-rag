@@ -1,0 +1,204 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: 'Source Serif 4', ui-serif, Georgia, serif;
+}
+
+/* Light theme (default) — cool slate neutrals with an indigo accent */
+:root {
+  --canvas: #f6f7fb;
+  --panel: #ecedf5;
+  --surface: #ffffff;
+  --surface-hover: #eceefa;
+  --ink: #181a26;
+  --ink-muted: #5b5f77;
+  --ink-faint: #969ab0;
+  --border: #e2e4ef;
+  --accent: #5b5bd6;
+  --accent-hover: #4a4ac2;
+  --accent-soft: #e9e8fb;
+  --accent-ink: #ffffff;
+}
+
+/* System preference: dark, unless the user explicitly chose light */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --canvas: #14151d;
+    --panel: #0f1017;
+    --surface: #1c1e29;
+    --surface-hover: #262838;
+    --ink: #e6e7f0;
+    --ink-muted: #9498b0;
+    --ink-faint: #63687e;
+    --border: #2b2d3d;
+    --accent: #9192f0;
+    --accent-hover: #a5a6f5;
+    --accent-soft: #2b2a4a;
+    --accent-ink: #14141f;
+  }
+}
+
+/* Explicit dark theme always wins over system preference */
+:root[data-theme='dark'] {
+  --canvas: #14151d;
+  --panel: #0f1017;
+  --surface: #1c1e29;
+  --surface-hover: #262838;
+  --ink: #e6e7f0;
+  --ink-muted: #9498b0;
+  --ink-faint: #63687e;
+  --border: #2b2d3d;
+  --accent: #9192f0;
+  --accent-hover: #a5a6f5;
+  --accent-soft: #2b2a4a;
+  --accent-ink: #14141f;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 9999px;
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message-in {
+  animation: message-in 0.25s ease-out;
+}
+
+@keyframes typing-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.typing-dot {
+  animation: typing-pulse 1.2s infinite ease-in-out;
+}
+
+/* Markdown content inside assistant/user messages */
+.markdown {
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+.markdown > *:first-child {
+  margin-top: 0;
+}
+
+.markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown p {
+  margin: 0 0 0.9em;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 0.9em 1.4em;
+}
+
+.markdown li {
+  margin: 0.2em 0;
+}
+
+.markdown li > p {
+  margin: 0;
+}
+
+.markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown blockquote {
+  border-left: 3px solid var(--border);
+  margin: 0 0 0.9em;
+  padding: 0.1em 0 0.1em 1em;
+  color: var(--ink-muted);
+}
+
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 0.9em;
+  font-size: 0.9em;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+
+.markdown th {
+  background-color: var(--surface-hover);
+  font-weight: 600;
+}
+
+.markdown code {
+  background-color: var(--surface-hover);
+  padding: 0.15em 0.4em;
+  border-radius: 0.35em;
+  font-size: 0.85em;
+}
+
+.markdown pre {
+  margin: 0 0 0.9em;
+  padding: 0;
+  background: none;
+}
+
+.markdown pre code {
+  background: none;
+  padding: 0;
+}

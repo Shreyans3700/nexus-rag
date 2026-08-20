@@ -1,10 +1,11 @@
 import uuid
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.auth import create_access_token, hash_password, verify_password
 from src.logger import get_logger, set_user_id
+from src.rate_limit import limiter
 from src.routes.dependencies import get_db
 from src.schema.models import AuthResponse, LoginRequest, SignupRequest, UserResponse
 
@@ -54,9 +55,10 @@ async def _create_user(email: str, password: str, db) -> AuthResponse:
 
 
 @router.post("/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-async def signup(request: SignupRequest, db=Depends(get_db)) -> AuthResponse:
+@limiter.limit("5/minute")
+async def signup(request: Request, body: SignupRequest, db=Depends(get_db)) -> AuthResponse:
     try:
-        return await _create_user(request.email, request.password, db)
+        return await _create_user(body.email, body.password, db)
     except HTTPException:
         raise
     except Exception as error:
@@ -68,8 +70,9 @@ async def signup(request: SignupRequest, db=Depends(get_db)) -> AuthResponse:
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(request: LoginRequest, db=Depends(get_db)) -> AuthResponse:
-    normalized_email = request.email.strip().lower()
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest, db=Depends(get_db)) -> AuthResponse:
+    normalized_email = body.email.strip().lower()
     logger.debug("Login request received for email=%s", normalized_email)
     try:
         async with db.acquire() as connection:
@@ -82,7 +85,7 @@ async def login(request: LoginRequest, db=Depends(get_db)) -> AuthResponse:
                 normalized_email,
             )
 
-        if row is None or not verify_password(request.password, row["password_hash"]):
+        if row is None or not verify_password(body.password, row["password_hash"]):
             logger.warning("Login failed for email=%s", normalized_email)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

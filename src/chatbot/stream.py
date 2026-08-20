@@ -199,7 +199,11 @@ async def stream_answer(
             if latency is None:
                 latency = time.perf_counter() - start_time
             latency = float(latency)
-            model_name = str(model_metadata.get("model_name", "unknown"))
+            model_name = str(
+                model_metadata.get("model_name")
+                or model_metadata.get("model")
+                or "unknown"
+            )
             finish_reason = str(
                 model_metadata.get("finish_reason")
                 or event_metadata.get("finish_reason")
