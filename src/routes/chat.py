@@ -7,7 +7,7 @@ from src.chatbot.stream import stream_answer
 from src.database.exceptions import SessionAccessError
 from src.database.fetch_data import get_session_context_from_db
 from src.logger import get_logger
-from src.rate_limit import limiter
+from src.rate_limit import get_user_or_ip, limiter
 from src.routes.dependencies import get_chain, get_db, get_milvus, get_title_chain
 from src.schema.models import RequestModel, ResponseModel
 
@@ -17,7 +17,7 @@ router = APIRouter(tags=["chat"])
 
 
 @router.post("/chat", response_model=ResponseModel)
-@limiter.limit("20/minute")
+@limiter.limit("20/minute", key_func=get_user_or_ip)
 async def chat_with_bot(
     request: Request,
     body: RequestModel,
@@ -91,7 +91,7 @@ async def chat_with_bot(
 
 
 @router.post("/chat/stream")
-@limiter.limit("20/minute")
+@limiter.limit("20/minute", key_func=get_user_or_ip)
 async def stream_chat(
     request: Request,
     body: RequestModel,
