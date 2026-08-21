@@ -125,6 +125,7 @@ MILVUS_TOP_K=5
 MILVUS_HYBRID_CANDIDATE_K=20
 MILVUS_RRF_K=60
 MILVUS_TOKEN=root:Milvus
+RETRIEVAL_MAX_COSINE_DISTANCE=0.6
 
 # Cross-encoder reranking (local model, loaded on first retrieval)
 RERANKER_ENABLED=true
@@ -376,6 +377,7 @@ docker compose logs -f worker
 
 - The context sent to the model is trimmed to the most recent configured number of messages. Update `MAX_CHAT_HISTORY_MESSAGES` in `.env` to change the window.
 - `MILVUS_TOP_K` controls how many document chunks are retrieved per query (default 5).
+- `RETRIEVAL_MAX_COSINE_DISTANCE` (default 0.6) drops dense-search candidates whose cosine distance to the query exceeds it, before ranking/reranking — a relevance floor so weakly-matching chunks aren't treated as authoritative context. 0.6 is a starting point for `text-embedding-3-small`; tune it against your own documents (retrieval scores are visible in the `SOURCES-TRACE`/`Running hybrid retrieval` debug logs).
 - When `RERANKER_ENABLED=true`, the app retrieves up to `RERANKER_CANDIDATE_K`
   hybrid-search candidates, uses a local cross-encoder to select the best
   `RERANKER_TOP_K`, and sends only those chunks to the LLM. The model is

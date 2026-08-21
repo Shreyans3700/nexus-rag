@@ -23,6 +23,13 @@ MILVUS_COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME", "doc_chunks")
 MILVUS_TOP_K = int(os.getenv("MILVUS_TOP_K", "5"))
 MILVUS_HYBRID_CANDIDATE_K = int(os.getenv("MILVUS_HYBRID_CANDIDATE_K", "20"))
 MILVUS_RRF_K = int(os.getenv("MILVUS_RRF_K", "60"))
+# Dense-leg relevance floor: chunks whose cosine distance (1 - cosine
+# similarity) to the query exceeds this are dropped before ranking/reranking.
+# 0.6 is a starting point for text-embedding-3-small, not a measured value —
+# tune it against real queries/documents (see SOURCES-TRACE retrieval logs).
+RETRIEVAL_MAX_COSINE_DISTANCE = float(
+    os.getenv("RETRIEVAL_MAX_COSINE_DISTANCE", "0.6")
+)
 # token format: "username:password" — default Milvus root credentials are root:Milvus
 MILVUS_TOKEN = os.getenv("MILVUS_TOKEN", "root:Milvus")
 
