@@ -12,6 +12,7 @@ from src.config.config import (
     RERANKER_CANDIDATE_K,
     RERANKER_ENABLED,
     RERANKER_TOP_K,
+    RETRIEVAL_MAX_COSINE_DISTANCE,
 )
 from src.documents.reranker import rerank_chunks
 from src.logger import get_logger
@@ -116,10 +117,18 @@ def _hybrid_search(
     top_k: int,
 ) -> list[dict]:
     candidate_k = max(top_k, MILVUS_HYBRID_CANDIDATE_K)
+    # radius/range_filter is Milvus's server-side range search: for COSINE
+    # (larger score = more similar), only candidates with
+    # radius < similarity <= range_filter survive the ANN search on this
+    # leg, before RRF fusion ever sees them.
+    min_similarity = 1.0 - RETRIEVAL_MAX_COSINE_DISTANCE
     dense_request = AnnSearchRequest(
         data=[query_vector],
         anns_field="dense_vector",
-        param={"metric_type": "COSINE", "params": {"nprobe": 16}},
+        param={
+            "metric_type": "COSINE",
+            "params": {"nprobe": 16, "radius": min_similarity, "range_filter": 1.0},
+        },
         limit=candidate_k,
         expr=filter_expr,
     )
@@ -173,13 +182,15 @@ async def retrieve_context(
             return RetrievalResult(context="", sources=[])
 
         logger.debug(
-            "Running hybrid retrieval: user_id=%s session_id=%s candidates=%s rerank_enabled=%s",
+            "Running hybrid retrieval: user_id=%s session_id=%s candidates=%s "
+            "rerank_enabled=%s max_cosine_distance=%s",
             user_id,
             session_id,
             RERANKER_CANDIDATE_K
             if RERANKER_ENABLED
             else max(top_k, MILVUS_HYBRID_CANDIDATE_K),
             RERANKER_ENABLED,
+            RETRIEVAL_MAX_COSINE_DISTANCE,
         )
         query_vector = await embedding_service.aembed_query(query)
         retrieval_k = RERANKER_CANDIDATE_K if RERANKER_ENABLED else top_k
